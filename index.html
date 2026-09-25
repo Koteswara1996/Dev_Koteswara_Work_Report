@@ -20,6 +20,9 @@
             try {
                 var t = localStorage.getItem('pureEnergyTheme');
                 if (t) document.documentElement.setAttribute('data-theme', t);
+                var sizes = { small: '87.5%', default: '100%', large: '112.5%', xlarge: '125%' };
+                var ts = localStorage.getItem('pureEnergyTextSize');
+                if (ts && sizes[ts]) document.documentElement.style.fontSize = sizes[ts];
             } catch (e) {}
             window.__bootAt = Date.now();
 
@@ -394,6 +397,48 @@
         .search-compact { flex: 0 0 180px; min-width: 140px; height: 38px; }
         .toolbar-filters { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; }
         .toolbar-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+
+        /* ── COMPACT TOOLBAR (search + gear, no dedicated filter row) ── */
+        .compact-toolbar {
+            display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+            padding: 12px var(--gutter, 16px); position: relative;
+        }
+        .toolbar-search-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
+        .toolbar-search-wrap .search-compact { width: 100%; flex: 1 1 auto; min-width: 0; padding-right: 34px; }
+        .search-cancel-btn {
+            display: none; position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+            width: 24px; height: 24px; border-radius: 50%; border: none; background: var(--separator);
+            color: var(--label-2); font-size: 0.72rem; line-height: 1; cursor: pointer; align-items: center; justify-content: center;
+        }
+        .gear-btn { position: relative; flex: 0 0 auto; }
+        .gear-dot {
+            position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%;
+            background: var(--red); border: 2px solid var(--glass-header-bg); display: none;
+        }
+        .filter-panel {
+            display: none; position: absolute; top: calc(100% + 6px); right: var(--gutter, 16px); z-index: 60;
+            width: min(320px, calc(100vw - 32px)); max-height: min(70vh, 520px); overflow-y: auto;
+            background: var(--card-bg); border: 1px solid var(--line); border-radius: 16px;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.22); padding: 14px; flex-direction: column; gap: 12px;
+        }
+        .filter-panel.open { display: flex; }
+        .filter-panel-group label {
+            display: block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.05em; color: var(--label-2); margin-bottom: 6px;
+        }
+        .filter-panel-group .multi-select, .filter-panel-group .filter-select { width: 100%; }
+        .filter-panel-divider { height: 1px; background: var(--separator); margin: 2px 0; }
+        .filter-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+        .fp-action-btn {
+            display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 10px;
+            background: var(--input-bg); border: 1px solid var(--line); font-size: 0.8rem; font-weight: 600;
+            color: var(--label); cursor: pointer; flex: 1 1 auto; justify-content: center; white-space: nowrap;
+        }
+        .fp-action-btn.danger { color: var(--red-ink); }
+        /* search-expanded: hide everything except the search bar itself */
+        .compact-toolbar.search-expanded > *:not(.toolbar-search-wrap) { display: none !important; }
+        .compact-toolbar.search-expanded .toolbar-search-wrap { flex: 1 1 100%; }
+        .compact-toolbar.search-expanded .search-cancel-btn { display: flex; }
         
         .filter-input, .filter-select, .ms-header {
             display: flex; align-items: center; height: 38px; padding: 0 12px;
@@ -511,10 +556,11 @@
         #binColgroup col:nth-child(4) { width: 116px; }
 
         /* Holidays: Date | Holiday for | Next working day | Type */
-        #holidaysColgroup col:nth-child(1) { width: 130px; }
+        #holidaysColgroup col:nth-child(1) { width: 168px; }
         #holidaysColgroup col:nth-child(2) { width: auto; }
-        #holidaysColgroup col:nth-child(3) { width: 160px; }
+        #holidaysColgroup col:nth-child(3) { width: 168px; }
         #holidaysColgroup col:nth-child(4) { width: 180px; }
+        #holidaysColgroup col:nth-child(5) { width: 100px; }
         
         /* ── THEAD — the sticky, opaque, non-overrideable header ── */
         thead {
@@ -1261,36 +1307,57 @@
 
     <!-- TASKS TAB -->
     <div class="content-area" id="registerTab">
-        <div class="toolbar-row single-line-toolbar" id="registerToolbar">
-            <input autocomplete="off" type="text" class="filter-input search-compact" id="searchInput" placeholder="Search tasks..." oninput="app.debouncedRender()">
-            
-            <div class="toolbar-filters">
-                <div class="multi-select" id="ms-category"><div class="ms-header" onclick="app.toggleDropdown('ms-category')">Categories</div><div class="ms-options" id="filterCategoryOpts"></div></div>
-                <div class="multi-select" id="ms-priority"><div class="ms-header" onclick="app.toggleDropdown('ms-priority')">Priorities</div><div class="ms-options" id="filterPriorityOpts"></div></div>
-                <div class="multi-select" id="ms-status"><div class="ms-header" onclick="app.toggleDropdown('ms-status')">Statuses</div><div class="ms-options" id="filterStatusOpts"></div></div>
-                <select class="filter-select" id="filterPending" onchange="app.renderTable()"><option value="All">All People</option></select>
-                <select class="filter-select" id="filterDue" onchange="app.renderTable()">
-                    <option value="All">Any Due Date</option>
-                    <option value="Overdue">Overdue</option>
-                    <option value="Today">Today</option>
-                    <option value="Tomorrow">Tomorrow</option>
-                    <option value="Next7Days">Next 7 days</option>
-                    <option value="ThisWeek">This week</option>
-                    <option value="NextWeek">Next week</option>
-                    <option value="ThisMonth">This month</option>
-                    <option value="NoDue">No due date</option>
-                </select>
+        <div class="toolbar-row compact-toolbar" id="registerToolbar">
+            <div class="toolbar-search-wrap">
+                <input autocomplete="off" type="text" class="filter-input search-compact" id="searchInput" placeholder="Search tasks..." oninput="app.debouncedRender()" onfocus="app.expandSearch('register')">
+                <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('register')" title="Close search">✕</button>
             </div>
 
-            <div class="toolbar-actions">
-                <button class="btn-icon select-toggle" onclick="app.toggleSelectMode()" title="Select several entries">☑</button>
-                <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
-                <button class="btn-icon" onclick="app.clearFilters()" title="Clear Filters">🚫</button>
-                <button class="btn-icon" id="sortToggleRegister" onclick="app.openSortMenu('Register', this)" title="Sort">🔃</button>
-                <button class="btn-icon" onclick="app.fitColumns('register')" title="Fit Columns">⤢</button>
-                <button class="btn-icon" onclick="app.printRegister()" title="Print">🖨️</button>
-                <button class="btn-icon" onclick="app.openEmailModal()" title="Mail">📧</button>
-                <button class="btn-new-entry" onclick="app.openTaskModal()" title="New Entry">＋</button>
+            <button type="button" class="btn-icon gear-btn" id="registerGearBtn" onclick="app.toggleFilterPanel('register')" title="Filters &amp; more">⚙️<span class="gear-dot" id="registerFilterDot"></span></button>
+            <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
+            <button class="btn-new-entry" onclick="app.openTaskModal()" title="New Entry">＋</button>
+
+            <div class="filter-panel" id="registerFilterPanel">
+                <div class="filter-panel-group">
+                    <label>Category</label>
+                    <div class="multi-select" id="ms-category"><div class="ms-header" onclick="app.toggleDropdown('ms-category')">Categories</div><div class="ms-options" id="filterCategoryOpts"></div></div>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Priority</label>
+                    <div class="multi-select" id="ms-priority"><div class="ms-header" onclick="app.toggleDropdown('ms-priority')">Priorities</div><div class="ms-options" id="filterPriorityOpts"></div></div>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Status</label>
+                    <div class="multi-select" id="ms-status"><div class="ms-header" onclick="app.toggleDropdown('ms-status')">Statuses</div><div class="ms-options" id="filterStatusOpts"></div></div>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Pending With</label>
+                    <select class="filter-select" id="filterPending" onchange="app.renderTable(); app.markFilterDot('register');"><option value="All">All People</option></select>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Due Date</label>
+                    <select class="filter-select" id="filterDue" onchange="app.renderTable(); app.markFilterDot('register');">
+                        <option value="All">Any Due Date</option>
+                        <option value="Overdue">Overdue</option>
+                        <option value="Today">Today</option>
+                        <option value="DueByToday">Due by Today (incl. overdue)</option>
+                        <option value="Tomorrow">Tomorrow</option>
+                        <option value="Next7Days">Next 7 days</option>
+                        <option value="ThisWeek">This week</option>
+                        <option value="NextWeek">Next week</option>
+                        <option value="ThisMonth">This month</option>
+                        <option value="NoDue">No due date</option>
+                    </select>
+                </div>
+                <div class="filter-panel-divider"></div>
+                <div class="filter-panel-actions">
+                    <button type="button" class="fp-action-btn" onclick="app.toggleSelectMode()">☑ Select</button>
+                    <button type="button" class="fp-action-btn" id="sortToggleRegister" onclick="app.openSortMenu('Register', this)">🔃 Sort</button>
+                    <button type="button" class="fp-action-btn" onclick="app.fitColumns('register')">⤢ Fit Columns</button>
+                    <button type="button" class="fp-action-btn" onclick="app.printRegister()">🖨️ Print</button>
+                    <button type="button" class="fp-action-btn" onclick="app.openEmailModal()">📧 Mail</button>
+                </div>
+                <button type="button" class="fp-action-btn danger" onclick="app.clearFilters()">🚫 Clear All Filters</button>
             </div>
         </div>
 
@@ -1325,27 +1392,51 @@
 
     <!-- HOLIDAYS TAB -->
     <div class="content-area" id="holidaysTab">
-        <div class="toolbar-row single-line-toolbar" id="holidaysToolbar">
-            <input autocomplete="off" type="text" class="filter-input search-compact" id="searchHolidays" placeholder="Search holidays..." oninput="app.renderHolidays()">
-            <div class="toolbar-filters">
-                <select class="filter-select" id="filterHolidayType" onchange="app.renderHolidays()">
-                    <option value="All">All Regions</option>
-                    <option value="USD Holiday">USD Holiday</option>
-                    <option value="Indian Bank Holiday">Indian Bank Holiday</option>
-                </select>
+        <div class="toolbar-row compact-toolbar" id="holidaysToolbar">
+            <div class="toolbar-search-wrap">
+                <input autocomplete="off" type="text" class="filter-input search-compact" id="searchHolidays" placeholder="Search holidays..." oninput="app.renderHolidays()" onfocus="app.expandSearch('holidays')">
+                <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('holidays')" title="Close search">✕</button>
+            </div>
+
+            <button type="button" class="btn-icon gear-btn" id="holidaysGearBtn" onclick="app.toggleFilterPanel('holidays')" title="Filters &amp; more">⚙️<span class="gear-dot" id="holidaysFilterDot"></span></button>
+            <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
+            <button class="btn-new-entry" onclick="app.openHolidayModal()" title="Add Holiday">＋</button>
+
+            <div class="filter-panel" id="holidaysFilterPanel">
+                <div class="filter-panel-group">
+                    <label>Holiday Calendar</label>
+                    <select class="filter-select" id="filterHolidayType" onchange="app.renderHolidays(); app.markFilterDot('holidays');">
+                        <option value="All">All Holiday Calendars</option>
+                        <option value="USD Holiday">USD Holiday</option>
+                        <option value="Indian Bank Holiday">Indian Bank Holiday</option>
+                    </select>
+                </div>
+                <div class="filter-panel-group">
+                    <label style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:0; font-size:0.86rem; font-weight:600; color:var(--label);">
+                        <input type="checkbox" id="filterHolidayAlertOnly" style="width:16px; height:16px; accent-color:var(--accent);" onchange="app.renderHolidays(); app.markFilterDot('holidays');"> Alerts-on only
+                    </label>
+                </div>
+                <div class="filter-panel-divider"></div>
+                <button type="button" class="fp-action-btn danger" onclick="app.clearHolidayFilters()">🚫 Clear All Filters</button>
             </div>
         </div>
 
-        <div class="table-wrap always">
+        <div id="holidayBlocksBanner" style="display:none; flex-direction:column; gap:8px; margin: 12px 4px 4px;"></div>
+
+        <p class="swipe-hint">Tap a holiday to edit · use the icons to edit or delete</p>
+        <div class="card-list" id="holidayCardList"></div>
+
+        <div class="table-wrap">
             <div class="table-container">
                 <table id="holidaysTable">
-                    <colgroup id="holidaysColgroup"><col><col><col><col></colgroup>
+                    <colgroup id="holidaysColgroup"><col><col><col><col><col></colgroup>
                     <thead id="holidaysTableHead">
                         <tr>
                             <th>Date</th>
                             <th>Holiday For</th>
                             <th>Next Working Day</th>
-                            <th>Type</th>
+                            <th>Holiday Calendar</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="holidaysTableBody"></tbody>
@@ -1356,21 +1447,30 @@
 
     <!-- COMPLETED TAB -->
     <div class="content-area" id="completedTab">
-        <div class="toolbar-row single-line-toolbar" id="completedToolbar">
-            <input autocomplete="off" type="text" class="filter-input search-compact" id="searchCompleted" placeholder="Search completed..." oninput="app.debouncedRender()">
-            
-            <div class="toolbar-filters">
-                <div class="multi-select" id="ms-category-completed">
-                    <div class="ms-header" onclick="app.toggleDropdown('ms-category-completed')">All Categories</div>
-                    <div class="ms-options" id="filterCategoryCompletedOpts"></div>
-                </div>
+        <div class="toolbar-row compact-toolbar" id="completedToolbar">
+            <div class="toolbar-search-wrap">
+                <input autocomplete="off" type="text" class="filter-input search-compact" id="searchCompleted" placeholder="Search completed..." oninput="app.debouncedRender()" onfocus="app.expandSearch('completed')">
+                <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('completed')" title="Close search">✕</button>
             </div>
 
-            <div class="toolbar-actions">
-                <button class="btn-icon select-toggle" onclick="app.toggleSelectMode()" title="Select several entries">☑</button>
-                <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
-                <button class="btn-icon" id="sortToggleCompleted" onclick="app.openSortMenu('Completed', this)" title="Sort">🔃</button>
-                <button class="btn-icon" onclick="app.fitColumns('completed')" title="Fit Columns">⤢</button>
+            <button type="button" class="btn-icon gear-btn" id="completedGearBtn" onclick="app.toggleFilterPanel('completed')" title="Filters &amp; more">⚙️<span class="gear-dot" id="completedFilterDot"></span></button>
+            <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
+
+            <div class="filter-panel" id="completedFilterPanel">
+                <div class="filter-panel-group">
+                    <label>Category</label>
+                    <div class="multi-select" id="ms-category-completed">
+                        <div class="ms-header" onclick="app.toggleDropdown('ms-category-completed')">All Categories</div>
+                        <div class="ms-options" id="filterCategoryCompletedOpts"></div>
+                    </div>
+                </div>
+                <div class="filter-panel-divider"></div>
+                <div class="filter-panel-actions">
+                    <button type="button" class="fp-action-btn" onclick="app.toggleSelectMode()">☑ Select</button>
+                    <button type="button" class="fp-action-btn" id="sortToggleCompleted" onclick="app.openSortMenu('Completed', this)">🔃 Sort</button>
+                    <button type="button" class="fp-action-btn" onclick="app.fitColumns('completed')">⤢ Fit Columns</button>
+                </div>
+                <button type="button" class="fp-action-btn danger" onclick="app.clearFilters()">🚫 Clear All Filters</button>
             </div>
         </div>
 
@@ -1441,6 +1541,17 @@
                 <button class="theme-btn" data-theme="neuo" onclick="app.applyTheme('neuo')">🧼 Neumorphism</button>
                 <button class="theme-btn" data-theme="clay" onclick="app.applyTheme('clay')">🏺 Claymorphism</button>
                 <button class="theme-btn" data-theme="hero3d" onclick="app.applyTheme('hero3d')">🔮 3D Hero</button>
+            </div>
+        </div>
+
+        <div class="cfg-section">
+            <div class="dash-title">Text Size</div>
+            <p class="cfg-hint">Default text size for the whole app. Tap to switch — takes effect immediately.</p>
+            <div class="theme-row">
+                <button class="theme-btn textsize-btn" data-size="small" onclick="app.applyTextSize('small')">A Small</button>
+                <button class="theme-btn textsize-btn" data-size="default" onclick="app.applyTextSize('default')">A Default</button>
+                <button class="theme-btn textsize-btn" data-size="large" onclick="app.applyTextSize('large')">A Large</button>
+                <button class="theme-btn textsize-btn" data-size="xlarge" onclick="app.applyTextSize('xlarge')">A X-Large</button>
             </div>
         </div>
 
@@ -1592,6 +1703,44 @@
                     <button type="submit" class="btn-modal primary">Save Entry</button>
                     <button type="button" class="btn-modal secondary" onclick="app.closeTaskModal()">Cancel</button>
                     <button type="button" class="btn-modal danger" id="deleteTaskBtn" style="display:none;" onclick="app.binCurrentTask()">Bin</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- HOLIDAY MODAL -->
+    <div class="modal" id="holidayModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2 id="holidayModalTitle">Add Holiday</h2>
+                <button class="modal-close" onclick="app.closeHolidayModal()">✕</button>
+            </div>
+            <form id="holidayForm" autocomplete="off" onsubmit="app.saveHoliday(event)">
+                <div class="form-group">
+                    <label>Date</label>
+                    <input autocomplete="off" type="date" id="holidayDate" required onchange="app.holidayDateChanged()">
+                </div>
+                <div class="form-group">
+                    <label>Holiday Name</label>
+                    <input autocomplete="off" type="text" id="holidayName" required placeholder="e.g. Republic Day">
+                </div>
+                <div class="form-group">
+                    <label>Holiday Calendar</label>
+                    <select id="holidayType"></select>
+                </div>
+                <div class="form-group">
+                    <label>Next Working Day</label>
+                    <input autocomplete="off" type="date" id="holidayNextWorking" placeholder="Auto-suggested">
+                </div>
+                <div class="form-group">
+                    <label style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:0; font-size:0.9rem; font-weight:600; color:var(--label);">
+                        <input type="checkbox" id="holidayAlertOn" style="width:18px; height:18px; accent-color:var(--accent);" checked> Alert me for this holiday
+                    </label>
+                </div>
+                <div class="modal-buttons">
+                    <button type="submit" class="btn-modal primary">Save Holiday</button>
+                    <button type="button" class="btn-modal secondary" onclick="app.closeHolidayModal()">Cancel</button>
+                    <button type="button" class="btn-modal danger" id="deleteHolidayBtn" style="display:none;" onclick="app.deleteCurrentHoliday()">Delete</button>
                 </div>
             </form>
         </div>
