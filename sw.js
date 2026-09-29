@@ -1,23 +1,12 @@
-/* Banking Work Tracker — service worker
-
-   Bump CACHE_VERSION on every deploy. The shell is fetched fresh on install
-   (cache: 'reload'), so a bump always pulls new files rather than reusing
-   whatever the browser's HTTP cache happens to hold.
-
-   Caches
-     <ver>-shell    the app itself: index.html, app.js, manifest, icons
-     <ver>-runtime  everything else same-origin, capped and trimmed
-
-   Strategies
-     navigation      network first (preload + 4s timeout) -> cached shell -> offline page
-     shell files     stale-while-revalidate, so a new deploy lands on next load
-     images / fonts  cache first, refreshed in the background
-     other GETs      stale-while-revalidate
-     cross-origin    untouched — Apps Script sync and Gmail always hit the network
-     non-GET         untouched
+/* Banking Work Tracker — Hardened Service Worker
+   
+   Cache Version: btw-v61
+   - Bumps cache version to force client-side cache refresh
+   - Pre-caches local xlsx.full.min.js for complete offline Excel reporting
+   - Preserves offline fallback page and runtime cache limits
 */
 
-const CACHE_VERSION = 'btw-v60';
+const CACHE_VERSION = 'btw-v61';
 const SHELL_CACHE = CACHE_VERSION + '-shell';
 const RUNTIME_CACHE = CACHE_VERSION + '-runtime';
 const RUNTIME_LIMIT = 60;
@@ -28,6 +17,7 @@ const SHELL = [
   './index.html',
   './app.js',
   './manifest.webmanifest',
+  './xlsx.full.min.js',
   './icon-192.png',
   './icon-512.png',
   './icon-maskable-512.png',
@@ -42,13 +32,13 @@ const OFFLINE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"
 <style>body{margin:0;display:grid;place-items:center;min-height:100vh;background:#f2f2f7;color:#1c1c1e;
 font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center;padding:24px}
 h1{font-size:1.25rem;margin:0 0 8px}p{color:#636366;font-size:.95rem;margin:0 0 20px}
-button{padding:12px 22px;border:0;border-radius:14px;background:#007aff;color:#fff;font-weight:700;font-size:.95rem}
+button{padding:12px 22px;border:0;border-radius:14px;background:#007aff;color:#fff;font-weight:700;font-size:.95rem;cursor:pointer}
 @media(prefers-color-scheme:dark){body{background:#000;color:#fff}p{color:#8e8e93}}</style>
 </head><body><div><h1>You are offline</h1>
 <p>The app could not be loaded from this device's cache.</p>
 <button onclick="location.reload()">Try again</button></div></body></html>`;
 
-/* ---------- helpers ---------- */
+/* ---------- Helpers ---------- */
 
 function isShellPath(url) {
   return SHELL.some((entry) => {
@@ -66,7 +56,6 @@ function cacheable(res) {
   return res && res.status === 200 && (res.type === 'basic' || res.type === 'default');
 }
 
-// Keep the runtime cache from growing without end (oldest entries go first).
 async function trim(cacheName, limit) {
   const cache = await caches.open(cacheName);
   const keys = await cache.keys();
@@ -79,7 +68,7 @@ async function putSafe(cacheName, request, response) {
     const cache = await caches.open(cacheName);
     await cache.put(request, response);
     if (cacheName === RUNTIME_CACHE) await trim(RUNTIME_CACHE, RUNTIME_LIMIT);
-  } catch (e) { /* quota or opaque response — not fatal */ }
+  } catch (e) {}
 }
 
 async function broadcast(message) {
@@ -87,25 +76,21 @@ async function broadcast(message) {
   clients.forEach((c) => c.postMessage(message));
 }
 
-/* ---------- install ---------- */
+/* ---------- Install ---------- */
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(SHELL_CACHE);
-    // One missing icon should not fail the whole install, so each file is
-    // fetched on its own and failures are tolerated.
     await Promise.all(SHELL.map(async (path) => {
       try {
         const res = await fetch(new Request(path, { cache: 'reload' }));
         if (res && res.ok) await cache.put(path, res.clone());
-      } catch (e) { /* offline or missing — skipped */ }
+      } catch (e) {}
     }));
-    // No skipWaiting here: a new build waits until the page says go, so an
-    // update never swaps files out from under someone mid-entry.
   })());
 });
 
-/* ---------- activate ---------- */
+/* ---------- Activate ---------- */
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
@@ -120,7 +105,7 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
-/* ---------- messages from the page ---------- */
+/* ---------- Messages from Client ---------- */
 
 self.addEventListener('message', (event) => {
   const data = event.data;
@@ -149,10 +134,8 @@ self.addEventListener('message', (event) => {
   }
 });
 
-/* ---------- fetch strategies ---------- */
+/* ---------- Fetch Strategies ---------- */
 
-// Network first, with the preloaded response and a timeout so a flaky
-// connection falls back to the cache instead of hanging on a white screen.
 async function navigationHandler(event) {
   const cached = await caches.match('./index.html', { ignoreSearch: true });
 
@@ -213,8 +196,8 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
-  // Apps Script sync, Gmail pulls and anything else off this origin go
-  // straight to the network — stale banking data is worse than none.
+
+  // Apps Script sync, Gmail pulls, and cross-origin APIs must hit network directly
   if (url.origin !== self.location.origin) return;
   if (req.headers.get('range')) return;
 
@@ -236,7 +219,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(staleWhileRevalidate(req, RUNTIME_CACHE));
 });
 
-/* ---------- notifications ---------- */
+/* ---------- Notifications ---------- */
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
