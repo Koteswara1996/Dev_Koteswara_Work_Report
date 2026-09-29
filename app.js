@@ -9,12 +9,18 @@ const CONFIG = {
     BASE_HOLIDAYS_KEY: 'pureEnergyHolidays',
     BASE_HOLIDAYS_TS_KEY: 'pureEnergyHolidaysUpdatedAt',
     BASE_HOLIDAY_ACK_KEY: 'pureEnergyHolidayAlertAck',
+    BASE_CUSTOM_CALENDARS_KEY: 'pureEnergyCustomCalendars',
+    BASE_LEAVE_DAYS_KEY: 'pureEnergyLeaveDays',
+    BASE_DEADLINE_ACK_KEY: 'pureEnergyDeadlineAlertAck',
     get STORAGE_KEY() { return `${this.BASE_STORAGE_KEY}_${app.currentUser}`; },
     get LISTS_KEY() { return `${this.BASE_LISTS_KEY}_${app.currentUser}`; },
     get LISTS_TS_KEY() { return `${this.BASE_LISTS_TS_KEY}_${app.currentUser}`; },
     get HOLIDAYS_KEY() { return `${this.BASE_HOLIDAYS_KEY}_${app.currentUser}`; },
     get HOLIDAYS_TS_KEY() { return `${this.BASE_HOLIDAYS_TS_KEY}_${app.currentUser}`; },
-    get HOLIDAY_ACK_KEY() { return `${this.BASE_HOLIDAY_ACK_KEY}_${app.currentUser}`; }
+    get HOLIDAY_ACK_KEY() { return `${this.BASE_HOLIDAY_ACK_KEY}_${app.currentUser}`; },
+    get CUSTOM_CALENDARS_KEY() { return `${this.BASE_CUSTOM_CALENDARS_KEY}_${app.currentUser}`; },
+    get LEAVE_DAYS_KEY() { return `${this.BASE_LEAVE_DAYS_KEY}_${app.currentUser}`; },
+    get DEADLINE_ACK_KEY() { return `${this.BASE_DEADLINE_ACK_KEY}_${app.currentUser}`; }
 };
 
 const app = {
@@ -130,6 +136,20 @@ const app = {
         return new Date(year, month - 1, day, hours, minutes, seconds);
     },
 
+    getTaskDeadlineDateTime(t) {
+        if (!t || !t.deadlineDate) return null;
+        const [year, month, day] = String(t.deadlineDate).split('-').map(Number);
+        if (!year || !month || !day) return null;
+        let hours = 23, minutes = 59, seconds = 59;
+        if (t.deadlineTime) {
+            const parts = String(t.deadlineTime).split(':').map(Number);
+            hours = parts[0] || 0;
+            minutes = parts[1] || 0;
+            seconds = 0;
+        }
+        return new Date(year, month - 1, day, hours, minutes, seconds);
+    },
+
     /* ---------- AUTH & 5 GLASS THEMES ---------- */
     checkAuthOnStart() {
         this.currentUser = localStorage.getItem('currentUser') || 'default';
@@ -222,6 +242,314 @@ const app = {
         }).then(res => res.json());
     },
 
+    // A status that means no work has happened on this entry yet — never
+    // worth a Daily Activity Report line by itself. Matched loosely so it
+    // still works whatever this profile's exact status list says.
+    isUnstartedStatus(status) {
+        return /not\s*(yet\s*)?start/i.test(String(status || '').trim());
+    },
+
+    // What actually goes into a report line for this task: the Tally
+    // Narration if one was generated (it's already the clearest, most
+    // complete description of what was done) — but WITHOUT the Mail Chain
+    // / mail subject baked into it, since that's meant for Tally, not the
+    // report — otherwise whatever is in Notes (which also picks up any
+    // remark typed in the Past Due Alert), otherwise the fallback given.
+    reportDetailsFor(task, fallback) {
+        if (task && task.narration) {
+            if (task.narration.reportText) return task.narration.reportText;
+            if (task.narration.text) {
+                // Older entries saved before reportText existed: strip the
+                // Mail Chain back out of the already-built text.
+                let t = task.narration.text;
+                if (task.mailChain && t.indexOf(task.mailChain) !== -1) {
+                    t = t.split(task.mailChain).join('').trim();
+                }
+                return t;
+            }
+        }
+        if (task && task.notes) return task.notes;
+        return fallback || '';
+    },
+
+    /* ---------- ACTIVITY LOG (fire-and-forget: never blocks or fails the
+       actual task action if the cloud URL is unset or the request fails).
+       Only "completed" and "status-changed" are logged — the Daily
+       Activity Report is built from this feed, and it should only ever
+       list tasks that were actually finished or moved forward today, not
+       every edit/reschedule/reopen/bin touch, and never a status change
+       that just lands back on "Not yet started". ---------- */
+    logTaskActivity(task, action, details, dateOverride) {
+        if (!task || !this.currentUser) return;
+        if (action !== 'completed' && action !== 'status-changed') return;
+        if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim() === "") return Promise.resolve();
+        return this.cloudRequest({
+            action: 'logActivity',
+            logType: 'task',
+            entry: {
+                taskId: task.id,
+                taskDescription: task.description,
+                action: action,
+                details: details || '',
+                // Sent explicitly so the report can group by the date this
+                // was actually done in the user's own local timezone,
+                // rather than whatever timezone the request lands in.
+                // resyncCompletedForReport() passes the entry's own
+                // completedDate here when backfilling a past date.
+                date: dateOverride || this.getLocalDateStr(new Date())
+            }
+        }).catch(() => {});
+    },
+
+    logGeneralActivity(activity, details) {
+        if (!this.currentUser) return Promise.reject(new Error('No profile'));
+        if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim() === "") return Promise.reject(new Error('Cloud URL is not configured (Setup)'));
+        return this.cloudRequest({
+            action: 'logActivity',
+            logType: 'general',
+            entry: { activity: activity, details: details || '' }
+        });
+    },
+
+    submitGeneralLog() {
+        const activityEl = document.getElementById('generalLogActivity');
+        const detailsEl = document.getElementById('generalLogDetails');
+        const activity = (activityEl.value || '').trim();
+        if (!activity) { this.showToast('Describe what you did first.', 'warning'); return; }
+
+        this.logGeneralActivity(activity, (detailsEl.value || '').trim())
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to log activity');
+                activityEl.value = '';
+                detailsEl.value = '';
+                this.showToast('Activity logged.', 'success');
+            })
+            .catch(err => this.showToast(err.message || 'Failed to log activity', 'error'));
+    },
+
+    // Safety net for the Daily Activity Report: re-sends every entry that's
+    // actually Completed on the chosen date to the activity log, in case
+    // any of them were completed through a path that didn't log at the
+    // time (an older version of the app, a dropped request, etc.). A Skip
+    // never sets status to Completed, so a skipped-but-still-open entry is
+    // naturally excluded already. Always safe to run again — it just
+    // re-sends the same "completed" entries, it never invents new ones.
+    resyncCompletedForReport() {
+        const dateEl = document.getElementById('dailyReportDate');
+        const date = dateEl.value || this.getLocalDateStr(new Date());
+        const matches = this.tasks.filter(t => !t.deleted && t.status === 'Completed' && t.completedDate === date);
+
+        if (!matches.length) { this.showToast('No completed entries found for ' + date + '.', 'info'); return; }
+        if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim() === '') {
+            this.showToast('Cloud URL is not configured (Setup).', 'warning');
+            return;
+        }
+
+        this.showToast('Resending ' + matches.length + ' completed ' + (matches.length === 1 ? 'entry' : 'entries') + '…', 'info');
+        Promise.all(matches.map(t => this.logTaskActivity(t, 'completed', this.reportDetailsFor(t), date)))
+            .then(() => this.showToast('Resynced ' + matches.length + ' completed ' + (matches.length === 1 ? 'entry' : 'entries') + ' for ' + date + ' — generate the report now.', 'success'));
+    },
+
+    generateDailyReport() {
+        const dateEl = document.getElementById('dailyReportDate');
+        const date = dateEl.value || this.getLocalDateStr(new Date());
+        const out = document.getElementById('dailyReportOutput');
+        const actions = document.getElementById('dailyReportActions');
+
+        out.style.display = 'block';
+        out.textContent = 'Generating…';
+        actions.style.display = 'none';
+
+        this.cloudRequest({ action: 'generateDailyReport', date: date })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to generate report');
+                out.textContent = data.report;
+                actions.style.display = 'grid';
+                this.showToast('Report generated.', 'success');
+            })
+            .catch(err => {
+                out.textContent = '';
+                out.style.display = 'none';
+                this.showToast(err.message || 'Failed to generate report', 'error');
+            });
+    },
+
+    copyDailyReport() {
+        const out = document.getElementById('dailyReportOutput');
+        const text = out ? out.textContent : '';
+        if (!text) return;
+        navigator.clipboard.writeText(text)
+            .then(() => this.showToast('Report copied.', 'success'))
+            .catch(() => this.showToast('Could not copy — select the text manually.', 'warning'));
+    },
+
+    exportDailyReportExcel() {
+        const out = document.getElementById('dailyReportOutput');
+        const text = out ? out.textContent : '';
+        if (!text) { this.showToast('Generate a report first.', 'warning'); return; }
+        if (typeof XLSX === 'undefined') { this.showToast('Excel export library did not load — check your connection and try again.', 'error'); return; }
+
+        const date = document.getElementById('dailyReportDate').value || this.getLocalDateStr(new Date());
+        const generatedAt = new Date().toLocaleString();
+
+        const rows = [
+            ['Daily Activity Report'],
+            ['Date', date],
+            ['Generated', generatedAt],
+            ['Profile', this.currentUser || ''],
+            [],
+            ['Report']
+        ];
+        text.split('\n').forEach(line => rows.push([line]));
+
+        const sheet = XLSX.utils.aoa_to_sheet(rows);
+        sheet['!cols'] = [{ wch: 100 }];
+
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, sheet, 'Daily Report');
+        XLSX.writeFile(workbook, `Daily_Activity_Report_${date}.xlsx`);
+        this.showToast('Excel file downloaded.', 'success');
+    },
+
+    /* ---------- REPORT STYLE SAMPLES ---------- */
+    saveReportSample() {
+        const el = document.getElementById('reportSampleText');
+        const text = (el.value || '').trim();
+        if (!text) { this.showToast('Paste a report first.', 'warning'); return; }
+
+        this.cloudRequest({ action: 'saveReportSample', sampleText: text })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to save sample');
+                el.value = '';
+                this.showToast('Style sample saved.', 'success');
+                this.loadReportSamples();
+            })
+            .catch(err => this.showToast(err.message || 'Failed to save sample', 'error'));
+    },
+
+    loadReportSamples() {
+        const box = document.getElementById('reportSamplesList');
+        if (!box) return;
+        this.cloudRequest({ action: 'listReportSamples' })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to load samples');
+                const samples = data.samples || [];
+                if (!samples.length) {
+                    box.innerHTML = '<div class="empty-state" style="padding:16px;"><span>No style samples saved yet.</span></div>';
+                    return;
+                }
+                box.innerHTML = samples.map(s => {
+                    const preview = (s.sampleText || '').replace(/\n/g, ' ').substring(0, 90);
+                    return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
+                        <span style="flex:1; min-width:0; font-size:0.82rem; color:var(--label-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${this.escAttr(s.sampleText || '')}">${this.sanitize(preview)}${(s.sampleText || '').length > 90 ? '…' : ''}</span>
+                        <button type="button" class="btn-icon bad" onclick="app.deleteReportSample('${this.escAttr(s.id)}')" title="Delete sample">${this.SVGS.bin}</button>
+                    </div>`;
+                }).join('');
+            })
+            .catch(() => { box.innerHTML = '<div class="empty-state" style="padding:16px;"><span>Could not load samples — check your Cloud URL.</span></div>'; });
+    },
+
+    deleteReportSample(id) {
+        if (!confirm('Remove this style sample?')) return;
+        this.cloudRequest({ action: 'deleteReportSample', id: id })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to delete sample');
+                this.showToast('Sample removed.', 'success');
+                this.loadReportSamples();
+            })
+            .catch(err => this.showToast(err.message || 'Failed to delete sample', 'error'));
+    },
+
+    /* ---------- FIXED DAILY ACTIVITIES ---------- */
+    /* ---------- CONFIG TAB: sidebar-nav + single-panel shell ----------
+       Desktop shows the nav list and the active panel side by side.
+       Mobile shows one at a time — tapping a nav row drills into that
+       panel with a back button; entering the Config tab always starts
+       back at the list on mobile, so it reads like a settings menu. ---------- */
+    CFG_LAST_PANEL_KEY: 'pureEnergyCfgLastPanel',
+
+    enterCfgTab() {
+        const shell = document.getElementById('cfgShell');
+        if (!shell) return;
+        const last = localStorage.getItem(this.CFG_LAST_PANEL_KEY);
+        const first = document.querySelector('.cfg-nav-item')?.dataset.cfgPanel;
+        this.setCfgActivePanel(last || first, false);
+        shell.classList.remove('showing-panel'); // always start at the list on mobile
+    },
+
+    setCfgActivePanel(slug, persist = true) {
+        if (!slug) return;
+        document.querySelectorAll('.cfg-nav-item').forEach(el => el.classList.toggle('active', el.dataset.cfgPanel === slug));
+        document.querySelectorAll('.cfg-panel').forEach(el => el.classList.toggle('active', el.dataset.cfgPanel === slug));
+        if (persist) localStorage.setItem(this.CFG_LAST_PANEL_KEY, slug);
+    },
+
+    showCfgPanel(slug) {
+        this.setCfgActivePanel(slug, true);
+        const shell = document.getElementById('cfgShell');
+        if (shell) shell.classList.add('showing-panel');
+    },
+
+    showCfgNav() {
+        const shell = document.getElementById('cfgShell');
+        if (shell) shell.classList.remove('showing-panel');
+    },
+
+    saveFixedTask() {
+        const el = document.getElementById('fixedTaskText');
+        const text = (el.value || '').trim();
+        if (!text) { this.showToast('Describe the activity first.', 'warning'); return; }
+
+        this.cloudRequest({ action: 'saveFixedTask', description: text })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to save');
+                el.value = '';
+                this.showToast('Fixed activity added.', 'success');
+                this.loadFixedTasks();
+            })
+            .catch(err => this.showToast(err.message || 'Failed to save', 'error'));
+    },
+
+    loadFixedTasks() {
+        const box = document.getElementById('fixedTasksList');
+        if (!box) return;
+        this.cloudRequest({ action: 'listFixedTasks' })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to load');
+                const items = data.fixedTasks || [];
+                if (!items.length) {
+                    box.innerHTML = '<div class="empty-state" style="padding:16px;"><span>No fixed activities yet.</span></div>';
+                    return;
+                }
+                box.innerHTML = items.map(f => `
+                    <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
+                        <label style="display:flex; align-items:center; gap:8px; flex:1; min-width:0; cursor:pointer;">
+                            <input type="checkbox" ${f.active ? 'checked' : ''} onchange="app.toggleFixedTask('${this.escAttr(f.id)}', this.checked)" style="width:16px; height:16px; accent-color:var(--accent); flex:0 0 auto;">
+                            <span style="font-size:0.86rem; color:var(--label); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this.sanitize(f.description)}</span>
+                        </label>
+                        <button type="button" class="btn-icon bad" onclick="app.deleteFixedTask('${this.escAttr(f.id)}')" title="Delete">${this.SVGS.bin}</button>
+                    </div>
+                `).join('');
+            })
+            .catch(() => { box.innerHTML = '<div class="empty-state" style="padding:16px;"><span>Could not load — check your Cloud URL.</span></div>'; });
+    },
+
+    toggleFixedTask(id, active) {
+        this.cloudRequest({ action: 'toggleFixedTask', id: id, active: active })
+            .catch(err => this.showToast(err.message || 'Failed to update', 'error'));
+    },
+
+    deleteFixedTask(id) {
+        if (!confirm('Remove this fixed activity?')) return;
+        this.cloudRequest({ action: 'deleteFixedTask', id: id })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to delete');
+                this.showToast('Fixed activity removed.', 'success');
+                this.loadFixedTasks();
+            })
+            .catch(err => this.showToast(err.message || 'Failed to delete', 'error'));
+    },
+
     /* ---------- BOOT ---------- */
     /* Stop the browser offering "Saved info" / past entries in any field.
        Runs once on start and again for fields added later (alarm cards, modals). */
@@ -252,8 +580,13 @@ const app = {
         this.watchAutofill();
         this.loadLists();
         this.loadData();
+        this.repairListsFromTaskData();
         this.loadHolidays();
+        this.loadCustomCalendars();
+        this.loadLeaveDays();
         this.applyTextSize();
+        const reportDateEl = document.getElementById('dailyReportDate');
+        if (reportDateEl && !reportDateEl.value) reportDateEl.value = this.getLocalDateStr(new Date());
         this.purgeOldBin();
         this.initViewMode();
         this.initCardSwipe();
@@ -313,7 +646,7 @@ const app = {
 
         switch (action) {
             case 'edit': this.openTaskModal(id); break;
-            case 'done': this.markComplete(id); break;
+            case 'done': this.tryCompleteTask(id); break;
             case 'reopen': this.reopenTask(id); break;
             case 'bin': this.softDelete(id); break;
             case 'restore': this.restoreTask(id); break;
@@ -321,6 +654,11 @@ const app = {
             case 'copy-mail': {
                 const t = this.findTask(id);
                 if (t) this.copyToClipboard(t.mailChain || '', el);
+                break;
+            }
+            case 'copy-narration': {
+                const t = this.findTask(id);
+                if (t) this.copyToClipboard((t.narration && t.narration.text) || '', el);
                 break;
             }
             case 'open-mail': {
@@ -333,6 +671,7 @@ const app = {
             case 'email-task': this.convertEmailToTask(id); break;
             case 'alarm-done': this.alarmAction('done', id); break;
             case 'alarm-ack': this.alarmAction('ack', id); break;
+            case 'alarm-skip': this.alarmAction('skip', id); break;
             case 'alarm-snooze': this.alarmAction('snooze', id); break;
             case 'alarm-reschedule': this.alarmAction('reschedule', id); break;
             case 'dash-filter': this.filterFromDashboard(el.dataset.ftype, el.dataset.fvalue); break;
@@ -895,10 +1234,20 @@ const app = {
         const now = new Date();
         const localTodayStr = this.getLocalDateStr(now);
         const activeOverdue = [];
+        const addedIds = new Set();
+        const addOnce = (t) => { if (!addedIds.has(String(t.id))) { addedIds.add(String(t.id)); activeOverdue.push(t); } };
 
         this.tasks.forEach(t => {
-            if (t.deleted || t.status === 'Completed' || !t.dueDate) return;
+            if (t.deleted || t.status === 'Completed') return;
 
+            // Deadline crossed — independent of the regular due-date alarm,
+            // and independent of whether the task even has a due date.
+            const deadlineDateTime = this.getTaskDeadlineDateTime(t);
+            if (deadlineDateTime && now >= deadlineDateTime && t.deadlineAckDate !== localTodayStr) {
+                addOnce(t);
+            }
+
+            if (!t.dueDate) return;
             const dueDateTime = this.getTaskDueDateTime(t);
             if (!dueDateTime) return;
 
@@ -914,7 +1263,17 @@ const app = {
 
             if (now >= dueDateTime && now >= todayAtDueTime &&
                 t.lastAckDate !== localTodayStr && now.getTime() >= snoozeUntil) {
-                activeOverdue.push(t);
+                addOnce(t);
+                return;
+            }
+
+            // Pre-day heads-up: if the due date itself falls on a holiday,
+            // Sunday, or leave day, surface it a day early so there's time
+            // to choose "do it today" or "move to the next working day"
+            // before it's overdue on a day nothing can actually be done.
+            if (this.isDateInRange(t, 'Tomorrow') && this.isNonWorkingDay(t.dueDate) &&
+                t.lastAckDate !== localTodayStr && now.getTime() >= snoozeUntil) {
+                addOnce(t);
             }
         });
 
@@ -993,13 +1352,38 @@ const app = {
             const el = document.createElement('div');
             el.className = 'alarm-card';
             el.style = 'padding: 14px 16px; margin-bottom: 12px; border-radius: 16px; background: rgba(255, 59, 48, 0.09); border: 1px solid rgba(255, 59, 48, 0.25);';
+
+            const nonWorking = this.isNonWorkingDay(task.dueDate);
+            const deadlineDateTime = this.getTaskDeadlineDateTime(task);
+            const deadlineCrossed = deadlineDateTime && new Date() >= deadlineDateTime && task.deadlineAckDate !== this.getLocalDateStr(new Date());
+            const deadlineBanner = deadlineCrossed ? `
+                <div class="alarm-deadline" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); font-size: 0.78rem; color: var(--red-ink);">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+                        <span style="font-weight:700;">⏰ Deadline crossed: ${this.formatDateStr(task.deadlineDate)} at ${task.deadlineTime ? this.formatTimeStr(task.deadlineTime) : '11:59 PM'}</span>
+                        <button type="button" class="btn-row" onclick="app.acknowledgeDeadline('${idAttr}')" style="padding:5px 10px; font-size:0.74rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:9px; cursor:pointer;">Acknowledge</button>
+                    </div>
+                </div>` : '';
+            const nonWorkingBanner = nonWorking ? `
+                <div class="alarm-nonworking" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.25); font-size: 0.78rem; color: var(--amber-ink);">
+                    <div style="font-weight:700; margin-bottom:6px;">This due date falls on a holiday, Sunday, or leave day.</div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button type="button" class="btn-row" onclick="app.resolveNonWorkingDue('${idAttr}', 'today')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:10px; cursor:pointer;">Do it today anyway</button>
+                        <button type="button" class="btn-row go" onclick="app.resolveNonWorkingDue('${idAttr}', 'next')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Move to next working day</button>
+                    </div>
+                </div>` : '';
+
             el.innerHTML = `
                 <div class="alarm-title" style="font-size: 0.96rem; font-weight: 700; color: var(--label);">${this.sanitize(task.description)}</div>
-                <div class="alarm-due" style="margin-top: 3px; font-size: 0.78rem; font-weight: 600; color: var(--red-ink); font-family: var(--font-num);">Due ${this.formatDateStr(task.dueDate)} at ${task.dueTime ? this.formatTimeStr(task.dueTime) : '11:59 PM'}</div>
+                <div class="alarm-due" style="margin-top: 3px; font-size: 0.78rem; font-weight: 600; color: var(--red-ink); font-family: var(--font-num);">${task.dueDate ? ('Due ' + this.formatDateStr(task.dueDate) + ' at ' + (task.dueTime ? this.formatTimeStr(task.dueTime) : '11:59 PM')) : ''}</div>
+                ${deadlineBanner}
+                ${nonWorkingBanner}
                 <div class="alarm-meta" style="display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0;">${chips.join('')}</div>
+                <input type="text" id="alarmRemarks_${idAttr}" placeholder="Remarks / notes for today (optional) — e.g. Nothing to do Today"
+                       style="width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 8px; font-size: 0.82rem; color: var(--label); background: var(--input-bg); border: 1px solid var(--line); border-radius: 10px;">
                 <div class="alarm-actions" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
                     <button type="button" class="btn-row ok" data-action="alarm-done" data-id="${idAttr}" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--green-ink); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; cursor: pointer;">Mark done</button>
                     <button type="button" class="btn-row warn" data-action="alarm-ack" data-id="${idAttr}" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--amber-ink); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 10px; cursor: pointer;">Silence today</button>
+                    <button type="button" class="btn-row" data-action="alarm-skip" data-id="${idAttr}" title="Not doing this today — stays open for another day, and today's alert is silenced without counting as done" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--label-2); background: var(--fill); border: 1px solid var(--line); border-radius: 10px; cursor: pointer;">Skip</button>
                     <span class="alarm-field" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
                         <input type="number" min="1" id="snoozeMins_${idAttr}" placeholder="Min" style="font-size: 0.84rem; color: var(--label); background: transparent; border: none; outline: none; padding: 4px; width: 50px; text-align: center;">
                         <button type="button" class="btn-row go" data-action="alarm-snooze" data-id="${idAttr}" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--blue-ink); background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.2); border-radius: 10px; cursor: pointer;">Snooze</button>
@@ -1036,17 +1420,45 @@ const app = {
         this.showToast('Recurrence set to ' + (task.recurrence === 'None' ? "doesn't repeat" : task.recurrence), 'success');
     },
 
+    acknowledgeDeadline(taskId) {
+        const task = this.findTask(taskId);
+        if (!task) return;
+        task.deadlineAckDate = this.getLocalDateStr(new Date());
+        task.updatedAt = Date.now();
+        this.saveData();
+        this.processEngine();
+        this.showToast('Deadline acknowledged for today.', 'success');
+    },
+
     alarmAction(action, taskId) {
         const task = this.findTask(taskId);
         if (!task) return;
 
+        // Whatever's typed in the alert's Remarks box travels with the
+        // task either way: saved onto its Notes so it's never lost, and —
+        // for "Mark done" specifically — handed straight to the Daily
+        // Activity Report as that entry's details, so a quick remark here
+        // is often the only editing the report needs.
+        const remarkEl = document.getElementById('alarmRemarks_' + taskId);
+        const remark = remarkEl ? remarkEl.value.trim() : '';
+        if (remark) {
+            task.notes = (task.notes ? task.notes + '\n' : '') + '[' + this.formatDateStr(this.getLocalDateStr(new Date())) + '] ' + remark;
+        }
+
         if (action === 'done') {
+            if (!this.subCategoryComplete(task)) {
+                this.tryCompleteTask(taskId);
+                return;
+            }
             this.markComplete(taskId);
         } else if (action === 'ack') {
             task.lastAckDate = this.getLocalDateStr(new Date());
+            task.deadlineAckDate = task.lastAckDate;
             task.updatedAt = Date.now();
             this.saveData(); this.renderTable();
             this.showToast("Task silenced for today.", "info");
+        } else if (action === 'skip') {
+            this.skipTask(taskId);
         } else if (action === 'snooze') {
             const input = document.getElementById('snoozeMins_' + taskId);
             const mins = parseInt(input ? input.value : '', 10) || 0;
@@ -1370,8 +1782,15 @@ const app = {
             categories: [],
             priorities: ['High', 'Medium', 'Low'],
             statuses: ['Pending', 'In-Progress', 'Completed'],
-            pendingWith: ['Self', 'Banking Team', 'Finance Manager', 'Vendor', 'Customer']
+            pendingWith: ['Self', 'Banking Team', 'Finance Manager', 'Vendor', 'Customer'],
+            subCategories: [],
+            // Categories that were opted into having a Sub Category at the
+            // time they were created/edited (see categoryHasSubCategory).
+            subCategoryCategories: [],
+            // Tally Narration sentence templates (see buildNarrationText).
+            narrationTypes: []
         };
+        let parsedStored = null;
         try {
             let stored = localStorage.getItem(CONFIG.LISTS_KEY);
             if (!stored) {
@@ -1379,19 +1798,95 @@ const app = {
                 const migratedTo = localStorage.getItem(CONFIG.LEGACY_MIGRATED_KEY);
                 if (legacy && (!migratedTo || migratedTo === this.currentUser)) stored = legacy;
             }
-            this.lists = stored ? Object.assign({}, defaultLists, JSON.parse(stored)) : defaultLists;
+            parsedStored = stored ? JSON.parse(stored) : null;
+            this.lists = parsedStored ? Object.assign({}, defaultLists, parsedStored) : defaultLists;
         } catch (e) { this.lists = defaultLists; }
         this.listsUpdatedAt = Number(localStorage.getItem(CONFIG.LISTS_TS_KEY)) || 0;
 
-        if (!localStorage.getItem('pureEnergyCatsCleared')) {
-            localStorage.setItem('pureEnergyCatsCleared', '1');
-            if (this.lists.categories && this.lists.categories.length) {
-                this.lists.categories = [];
-                this.listsUpdatedAt = Date.now();
-                localStorage.setItem(CONFIG.LISTS_TS_KEY, String(this.listsUpdatedAt));
-                localStorage.setItem(CONFIG.LISTS_KEY, JSON.stringify(this.lists));
-            }
+        if (!Array.isArray(this.lists.subCategoryCategories)) this.lists.subCategoryCategories = [];
+        // One-time default: if this profile never explicitly set which
+        // categories carry a Sub Category, seed it from the categories that
+        // already look like Duty Payment / Demand Draft / Import Payments /
+        // Domestic Payment / Urgent Payment. Never runs again once a value
+        // (even an empty one) has been saved, so it won't fight the user's
+        // own choices made from the category editor.
+        if (!parsedStored || !Array.isArray(parsedStored.subCategoryCategories)) {
+            (this.lists.categories || []).forEach(c => {
+                const looksLikeSubCategoryCategory = /duty/i.test(c) || /demand\s*draft/i.test(c) ||
+                    this.isDomesticPaymentCategory(c) || this.isUrgentPaymentCategory(c) || this.isImportPaymentCategory(c);
+                if (looksLikeSubCategoryCategory && this.lists.subCategoryCategories.indexOf(c) === -1) {
+                    this.lists.subCategoryCategories.push(c);
+                }
+            });
         }
+
+        // Sub Categories carry per-item rule fields ({name, fields:[...]}) —
+        // normalize any older plain-string entries (from before rules
+        // existed) into that shape so nothing crashes on old data.
+        if (Array.isArray(this.lists.subCategories)) {
+            this.lists.subCategories = this.lists.subCategories.map(sc =>
+                (typeof sc === 'string') ? { id: this.newId(), name: sc, fields: [] } : sc
+            );
+        } else {
+            this.lists.subCategories = [];
+        }
+
+        // One-time default: seed the standard set of Tally Narration
+        // templates (from the reference "Accounting Narrations" sheet) the
+        // first time this profile ever loads with the feature. After that
+        // it's entirely up to Manage Narration Types — this never runs
+        // again once a (possibly edited/emptied) list has been saved.
+        if (!Array.isArray(this.lists.narrationTypes)) this.lists.narrationTypes = [];
+        if (!parsedStored || !Array.isArray(parsedStored.narrationTypes)) {
+            this.lists.narrationTypes = [
+                { id: this.newId(), name: 'Advance against Purchase Order', hasPercent: true, phrase: 'Advance amount paid against Po No: ', docLabel: 'PO No', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: '2nd Advance against Purchase Order', hasPercent: true, phrase: '2nd Advance amount paid against Po No: ', docLabel: 'PO No', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'Balance Payment against Purchase Order/Invoice', hasPercent: false, phrase: 'Balance amount paid against Invoice No: ', docLabel: 'Invoice No', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'COD Charges against Invoice', hasPercent: false, phrase: 'Amount Paid twds COD Charges Against Invoice No: ', docLabel: 'Invoice No', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'COD Charges against Order Id', hasPercent: false, phrase: 'Amount Paid twds COD Charges Against Order Id: ', docLabel: 'Order Id', fields: [{ label: 'Vendor Name', options: [] }], leadFieldLabel: 'Vendor Name' },
+                { id: this.newId(), name: 'COD Charges against PO', hasPercent: false, phrase: 'Amount Paid twds COD Charges Against PO No: ', docLabel: 'PO No', fields: [{ label: 'Vendor Name', options: [] }], leadFieldLabel: 'Vendor Name' },
+                { id: this.newId(), name: 'I&C Charges', hasPercent: false, phrase: 'Amount paid twds I&C Charges for Order id: ', docLabel: 'Order Id', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'Employee Advance Request', hasPercent: false, phrase: 'Amount Paid Against Emploee Advance Request Form No: ', docLabel: 'Form No', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'Employee Advance Settlement', hasPercent: false, phrase: 'Amount Paid Against Emploee Settlement Request Form No: ', docLabel: 'Form No', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'Payment against Invoice', hasPercent: false, phrase: 'amount paid against Invoice No: ', docLabel: 'Invoice No', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'Legal Charges (against Case No)', hasPercent: false, phrase: 'amount paid for Legal Charges against Case No: ', docLabel: 'Case No(s)', fields: [], leadFieldLabel: '' },
+                { id: this.newId(), name: 'Legal Charges (without Case No)', hasPercent: false, phrase: 'amount paid for Legal Charges for ', docLabel: 'Description', fields: [], leadFieldLabel: '' }
+            ];
+        } else {
+            // Upgrade path: a profile saved before "extra fields" existed
+            // (no narration type has a `fields` array yet) gets Vendor Name
+            // added to the two COD-by-reference types, adding the PO
+            // variant if it's missing entirely. Never runs again once any
+            // type has a `fields` array — after that it's fully in the
+            // user's hands via Manage Narration Types.
+            const hadFieldsAlready = this.lists.narrationTypes.some(nr => Array.isArray(nr.fields));
+            this.lists.narrationTypes.forEach(nr => {
+                if (!Array.isArray(nr.fields)) nr.fields = [];
+                if (typeof nr.leadFieldLabel !== 'string') nr.leadFieldLabel = '';
+            });
+            if (!hadFieldsAlready) this.ensureCodVendorFields();
+        }
+    },
+
+    // See loadLists()'s upgrade path above — adds a "Vendor Name" lead
+    // field to "COD Charges against Order Id" and "COD Charges against PO"
+    // (creating the PO variant if it doesn't exist), without touching
+    // anything else in narrationTypes.
+    ensureCodVendorFields() {
+        if (!Array.isArray(this.lists.narrationTypes)) return;
+        [
+            { name: 'COD Charges against Order Id', phrase: 'Amount Paid twds COD Charges Against Order Id: ', docLabel: 'Order Id' },
+            { name: 'COD Charges against PO', phrase: 'Amount Paid twds COD Charges Against PO No: ', docLabel: 'PO No' }
+        ].forEach(spec => {
+            let nr = this.lists.narrationTypes.find(x => x.name === spec.name);
+            if (!nr) {
+                nr = { id: this.newId(), name: spec.name, hasPercent: false, phrase: spec.phrase, docLabel: spec.docLabel, fields: [], leadFieldLabel: '' };
+                this.lists.narrationTypes.push(nr);
+            }
+            if (!Array.isArray(nr.fields)) nr.fields = [];
+            if (!nr.fields.some(f => f.label === 'Vendor Name')) nr.fields.push({ label: 'Vendor Name', options: [] });
+            if (!nr.leadFieldLabel) nr.leadFieldLabel = 'Vendor Name';
+        });
     },
 
     saveLists(bump = true) {
@@ -1403,6 +1898,38 @@ const app = {
         this.populateDropdowns();
         this.renderTable();
         if (bump) this.syncToGoogleSheets();
+    },
+
+    // Self-heals the option lists (Category, Priority, Status, Pending With)
+    // from what your actual tasks are using. The Filter dropdowns already
+    // did this at display time via a "union" with this.tasks, so real
+    // category/priority/status/pendingWith values were never actually lost
+    // even after the old list got emptied — they just weren't showing up
+    // in the entry screen's dropdown or its "Edit" list manager. This
+    // makes that recovery permanent: it writes the real values back into
+    // the saved list itself, once, so it's fixed everywhere from here on.
+    repairListsFromTaskData() {
+        const fieldsToHeal = [
+            ['categories', 'category'],
+            ['priorities', 'priority'],
+            ['statuses', 'status'],
+            ['pendingWith', 'pendingWith']
+        ];
+        let changed = false;
+
+        fieldsToHeal.forEach(([listKey, taskField]) => {
+            if (!Array.isArray(this.lists[listKey])) this.lists[listKey] = [];
+            this.tasks.forEach(t => {
+                if (t.purged) return;
+                const v = t[taskField];
+                if (v && this.lists[listKey].indexOf(v) === -1) {
+                    this.lists[listKey].push(v);
+                    changed = true;
+                }
+            });
+        });
+
+        if (changed) this.saveLists(true);
     },
 
     /* ---------- HOLIDAY CALENDAR (persisted, editable per user) ---------- */
@@ -1439,11 +1966,185 @@ const app = {
     },
 
     holidayCalendars() {
-        // Distinct "Holiday Calendar" names in use, plus the two defaults so
-        // the picker never looks empty on a brand-new list.
+        // Distinct "Holiday Calendar" names in use, plus the two defaults and
+        // any custom ones registered up front, so a calendar can exist (and
+        // be picked) before it's ever used on an actual holiday.
         const out = ['USD Holiday', 'Indian Bank Holiday'];
+        (this.customCalendars || []).forEach(name => { if (out.indexOf(name) === -1) out.push(name); });
         this.holidays.forEach(h => { if (h.type && out.indexOf(h.type) === -1) out.push(h.type); });
         return out;
+    },
+
+    /* ---------- CUSTOM HOLIDAY CALENDARS (add/delete calendar names) ---------- */
+    /* ---------- LEAVE DAYS: mark a day (usually today) as "nothing to do".
+       Non-working for alert-deferral purposes, and deliberately never
+       logged as activity, so it doesn't show up in the daily report. ---------- */
+    loadLeaveDays() {
+        try {
+            const stored = localStorage.getItem(CONFIG.LEAVE_DAYS_KEY);
+            this.leaveDays = stored ? JSON.parse(stored) : [];
+            if (!Array.isArray(this.leaveDays)) this.leaveDays = [];
+        } catch (e) { this.leaveDays = []; }
+    },
+
+    saveLeaveDays() {
+        localStorage.setItem(CONFIG.LEAVE_DAYS_KEY, JSON.stringify(this.leaveDays));
+        this.renderLeaveDaysList();
+        if (this.currentTab === 'Dashboard') this.renderDashboard();
+    },
+
+    isTodayLeave() {
+        return this.leaveDays.indexOf(this.getLocalDateStr(new Date())) !== -1;
+    },
+
+    toggleTodayLeave() {
+        const today = this.getLocalDateStr(new Date());
+        if (this.leaveDays.indexOf(today) !== -1) {
+            this.leaveDays = this.leaveDays.filter(d => d !== today);
+            this.showToast('Leave day unmarked for today.', 'success');
+        } else {
+            this.leaveDays.push(today);
+            this.showToast('Today marked as a leave day.', 'success');
+        }
+        this.saveLeaveDays();
+    },
+
+    deleteLeaveDay(date) {
+        this.leaveDays = this.leaveDays.filter(d => d !== date);
+        this.saveLeaveDays();
+    },
+
+    renderLeaveDaysList() {
+        const box = document.getElementById('leaveDaysList');
+        const btn = document.getElementById('leaveTodayBtn');
+        if (btn) btn.textContent = this.isTodayLeave() ? 'Unmark Today\'s Leave' : 'Mark Today as Leave';
+        if (!box) return;
+        const days = this.leaveDays.slice().sort();
+        if (!days.length) {
+            box.innerHTML = '<div class="empty-state" style="padding:14px;"><span>No leave days marked.</span></div>';
+            return;
+        }
+        box.innerHTML = days.map(d => `
+            <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
+                <span style="flex:1; font-size:0.86rem; color:var(--label);">${this.formatDateStr(d, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                <button type="button" class="btn-icon bad" onclick="app.deleteLeaveDay('${this.escAttr(d)}')" title="Remove">${this.SVGS.bin}</button>
+            </div>
+        `).join('');
+    },
+
+    /* ---------- NON-WORKING DAY HELPERS (Sunday / holiday / leave day) ----------
+       Used to decide whether a task's due date needs the "do today or move
+       to next working day" choice at alert time. ---------- */
+    isNonWorkingDay(dateStr) {
+        if (!dateStr) return false;
+        const p = String(dateStr).split('-').map(Number);
+        if (p.length !== 3 || !p[0] || !p[1] || !p[2]) return false;
+        const d = new Date(p[0], p[1] - 1, p[2]);
+        if (d.getDay() === 0) return true; // Sunday
+        if (this.holidays.some(h => h.date === dateStr)) return true;
+        if (this.leaveDays.indexOf(dateStr) !== -1) return true;
+        return false;
+    },
+
+    nextWorkingDayFrom(dateStr) {
+        const p = String(dateStr).split('-').map(Number);
+        if (p.length !== 3 || !p[0] || !p[1] || !p[2]) return dateStr;
+        const d = new Date(p[0], p[1] - 1, p[2]);
+        for (let i = 0; i < 30; i++) {
+            d.setDate(d.getDate() + 1);
+            const candidate = this.getLocalDateStr(d);
+            if (!this.isNonWorkingDay(candidate)) return candidate;
+        }
+        return dateStr;
+    },
+
+    // Called from the alarm card's "Keep Today" / "Next Working Day" choice.
+    resolveNonWorkingDue(taskId, choice) {
+        const t = this.findTask(taskId);
+        if (!t) return;
+        if (choice === 'next') {
+            const newDate = this.nextWorkingDayFrom(t.dueDate);
+            t.dueDate = newDate;
+            t.lastAckDate = null;
+            t.snoozeUntil = null;
+            t.updatedAt = Date.now();
+            this.logTaskActivity(t, 'rescheduled', 'Moved off a non-working day to ' + newDate);
+            this.showToast('Moved to next working day (' + this.formatDateStr(newDate) + ').', 'success');
+        } else {
+            t.lastAckDate = this.getLocalDateStr(new Date());
+            t.updatedAt = Date.now();
+            this.showToast('Kept for today.', 'success');
+        }
+        this.saveData();
+        this.renderTable();
+        this.processEngine();
+        this.syncToGoogleSheets();
+    },
+
+    loadCustomCalendars() {
+        try {
+            const stored = localStorage.getItem(CONFIG.CUSTOM_CALENDARS_KEY);
+            this.customCalendars = stored ? JSON.parse(stored) : [];
+            if (!Array.isArray(this.customCalendars)) this.customCalendars = [];
+        } catch (e) { this.customCalendars = []; }
+    },
+
+    saveCustomCalendars() {
+        localStorage.setItem(CONFIG.CUSTOM_CALENDARS_KEY, JSON.stringify(this.customCalendars));
+    },
+
+    addCustomCalendar() {
+        const el = document.getElementById('newCalendarName');
+        const name = (el.value || '').trim();
+        if (!name) { this.showToast('Give the calendar a name.', 'warning'); return; }
+        if (this.holidayCalendars().some(c => c.toLowerCase() === name.toLowerCase())) {
+            this.showToast('That calendar already exists.', 'warning');
+            return;
+        }
+        this.customCalendars.push(name);
+        this.saveCustomCalendars();
+        el.value = '';
+        this.renderCalendarManagerList();
+        this.showToast('Calendar added.', 'success');
+    },
+
+    deleteCustomCalendar(name) {
+        const inUse = this.holidays.some(h => h.type === name);
+        if (inUse && !confirm(`"${name}" is used by existing holidays — remove it from the calendar list anyway? (those holidays keep their type, they just won't be pre-registered.)`)) return;
+        this.customCalendars = this.customCalendars.filter(c => c !== name);
+        this.saveCustomCalendars();
+        this.renderCalendarManagerList();
+        this.showToast('Calendar removed.', 'success');
+    },
+
+    openCalendarManager() {
+        this.renderCalendarManagerList();
+        document.getElementById('calendarManagerModal').classList.add('open');
+    },
+
+    closeCalendarManager() {
+        document.getElementById('calendarManagerModal').classList.remove('open');
+        // Whichever calendars remain should be reflected back in the open Holiday modal's select, if any.
+        const typeSel = document.getElementById('holidayType');
+        if (typeSel) {
+            const prev = typeSel.value;
+            typeSel.innerHTML = this.holidayCalendars().map(t => `<option value="${this.escAttr(t)}">${this.sanitize(t)}</option>`).join('');
+            if (Array.from(typeSel.options).some(o => o.value === prev)) typeSel.value = prev;
+        }
+    },
+
+    renderCalendarManagerList() {
+        const box = document.getElementById('calendarManagerList');
+        if (!box) return;
+        const builtIn = ['USD Holiday', 'Indian Bank Holiday'];
+        const all = this.holidayCalendars();
+        box.innerHTML = all.map(name => {
+            const isBuiltIn = builtIn.indexOf(name) !== -1;
+            return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
+                <span style="flex:1; font-size:0.86rem; color:var(--label);">${this.sanitize(name)}${isBuiltIn ? ' <span style=\"color:var(--label-2); font-weight:400;\">(built-in)</span>' : ''}</span>
+                ${isBuiltIn ? '' : `<button type="button" class="btn-icon bad" onclick="app.deleteCustomCalendar('${this.escAttr(name)}')" title="Delete">${this.SVGS.bin}</button>`}
+            </div>`;
+        }).join('');
     },
 
     // Skips weekends and any other holidays already on file, so the
@@ -1645,6 +2346,7 @@ const app = {
         const titles = { categories: "Categories", priorities: "Priorities", statuses: "Status Options", pendingWith: "Pending With" };
         document.getElementById('listManagerTitle').textContent = `Manage ${titles[key]}`;
         this.renderListManagerItems();
+        this.updateNewCategorySubCategoryOption();
         document.getElementById('listManagerModal').classList.add('open');
     },
 
@@ -1653,6 +2355,18 @@ const app = {
         const titles = { categories: "Categories", priorities: "Priorities", statuses: "Status Options", pendingWith: "Pending With" };
         document.getElementById('listManagerTitle').textContent = `Manage ${titles[this.editingListKey]}`;
         this.renderListManagerItems();
+        this.updateNewCategorySubCategoryOption();
+    },
+
+    // Only Categories get the "needs a Sub Category" checkbox — it's the
+    // one place that option is adopted, at category-creation time.
+    updateNewCategorySubCategoryOption() {
+        const wrap = document.getElementById('newCategorySubCategoryOption');
+        if (!wrap) return;
+        const isCategories = this.editingListKey === 'categories';
+        wrap.style.display = isCategories ? 'flex' : 'none';
+        const cb = document.getElementById('newCategoryHasSubCategory');
+        if (cb) cb.checked = false;
     },
 
     closeListManager() {
@@ -1663,9 +2377,26 @@ const app = {
     renderListManagerItems() {
         const container = document.getElementById('listManagerItems');
         container.innerHTML = '';
+        const isCategories = this.editingListKey === 'categories';
         (this.lists[this.editingListKey] || []).forEach((item, index) => {
-            container.innerHTML += `<div class="lm-item"><span class="lm-name">${this.sanitize(item)}</span><button type="button" class="lm-del" data-action="list-delete" data-index="${index}">Delete</button></div>`;
+            const subCatToggle = isCategories
+                ? `<label class="lm-subcat-toggle" style="display:flex; align-items:center; gap:5px; font-size:0.72rem; color:var(--label-2); cursor:pointer; white-space:nowrap;" title="Show a Sub Category when an entry in this category is marked Completed">
+                        <input type="checkbox" style="width:auto;" ${this.categoryHasSubCategory(item) ? 'checked' : ''} onchange="app.toggleCategorySubCategory(${index}, this.checked)">Sub Category
+                   </label>`
+                : '';
+            container.innerHTML += `<div class="lm-item"><span class="lm-name">${this.sanitize(item)}</span>${subCatToggle}<button type="button" class="lm-del" data-action="list-delete" data-index="${index}">Delete</button></div>`;
         });
+    },
+
+    // Toggles whether a category has adopted the Sub Category option.
+    toggleCategorySubCategory(index, on) {
+        const name = this.lists.categories[index];
+        if (!name) return;
+        if (!Array.isArray(this.lists.subCategoryCategories)) this.lists.subCategoryCategories = [];
+        const at = this.lists.subCategoryCategories.indexOf(name);
+        if (on && at === -1) this.lists.subCategoryCategories.push(name);
+        else if (!on && at !== -1) this.lists.subCategoryCategories.splice(at, 1);
+        this.saveLists();
     },
 
     addListOption() {
@@ -1673,6 +2404,14 @@ const app = {
         const val = input.value.trim();
         if (val && !this.lists[this.editingListKey].includes(val)) {
             this.lists[this.editingListKey].push(val);
+            if (this.editingListKey === 'categories') {
+                const cb = document.getElementById('newCategoryHasSubCategory');
+                if (cb && cb.checked) {
+                    if (!Array.isArray(this.lists.subCategoryCategories)) this.lists.subCategoryCategories = [];
+                    this.lists.subCategoryCategories.push(val);
+                    cb.checked = false;
+                }
+            }
             this.saveLists();
             this.renderListManagerItems();
             input.value = '';
@@ -1710,6 +2449,9 @@ const app = {
         if (inUse > 0 && !confirm(`"${removed}" is used by ${inUse} entries. Delete anyway?`)) return;
 
         this.lists[this.editingListKey].splice(index, 1);
+        if (this.editingListKey === 'categories' && Array.isArray(this.lists.subCategoryCategories)) {
+            this.lists.subCategoryCategories = this.lists.subCategoryCategories.filter(c => c !== removed);
+        }
         this.saveLists();
         this.renderListManagerItems();
     },
@@ -2191,6 +2933,8 @@ const app = {
         keepSelect('taskPriority', this.lists.priorities.map(opt).join(''));
         keepSelect('taskStatus', this.lists.statuses.map(opt).join(''));
         keepSelect('taskPendingWith', '<option value="">Select Person</option>' + this.lists.pendingWith.map(opt).join(''));
+        keepSelect('taskSubCategory', '<option value="">Select Sub Category</option>' + (this.lists.subCategories || []).map(sc => opt(sc.name)).join(''));
+        keepSelect('taskNarrationType', '<option value="">— Not a payment / skip —</option>' + (this.lists.narrationTypes || []).map(nr => opt(nr.name)).join(''));
 
         const union = (base, field) => {
             const out = [].concat(base);
@@ -2280,6 +3024,8 @@ const app = {
         const btn = document.querySelector(`.tabbar-btn[data-tab="${tab}"]`);
         if (btn) btn.classList.add('active');
         document.getElementById('screenTitle').textContent = titles[tab] || tab;
+
+        if (tab === 'Config') { this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); }
 
         this.renderTable();
     },
@@ -2540,7 +3286,8 @@ const app = {
             const matchSearch = !search ||
                 (t.description || '').toLowerCase().includes(search) ||
                 (t.mailChain || '').toLowerCase().includes(search) ||
-                (t.notes || '').toLowerCase().includes(search);
+                (t.notes || '').toLowerCase().includes(search) ||
+                (t.subCategory || '').toLowerCase().includes(search);
             const matchDue = dueMode.value === 'NoDue' ? !t.dueDate : (dueMode.value !== 'All' ? this.isDateInRange(t, dueMode.value) : true);
             const matchCat = catVals.includes('All') || catVals.includes(t.category);
             const matchPri = priVals.includes('All') || priVals.includes(t.priority);
@@ -2604,6 +3351,8 @@ const app = {
 
             const recBadge = (t.recurrence && t.recurrence !== 'None')
                 ? `<span class="rec-badge">${this.sanitize(t.recurrence)}</span>` : '';
+            const skipBadge = (Array.isArray(t.skippedDates) && t.skippedDates.indexOf(this.getLocalDateStr(new Date())) !== -1)
+                ? `<span class="skip-badge" title="Marked as not done today from the Past Due Alert">Skipped today</span>` : '';
 
             const mailChainHtml = t.mailChain ? `
                 <div class="mailchain">
@@ -2612,7 +3361,7 @@ const app = {
                             title="Copy reference" aria-label="Copy reference">${this.SVGS.copy}</button>
                 </div>` : '';
 
-            const descHtml = `<div class="task-line" title="${this.escAttr(t.description)}">${this.sanitize(t.description)}${recBadge}</div>${mailChainHtml}`;
+            const descHtml = `<div class="task-line" title="${this.escAttr(t.description)}">${this.sanitize(t.description)}${recBadge}${skipBadge}</div>${mailChainHtml}`;
             const viewMailBtn = t.emailId
                 ? `<button type="button" class="btn-icon go" data-action="open-mail" data-id="${idAttr}" title="Open Mail">${this.SVGS.mail}</button>` : '';
 
@@ -2645,6 +3394,8 @@ const app = {
                         <button type="button" class="btn-icon ok" data-action="done" data-id="${idAttr}" title="Mark Done">${this.SVGS.done}</button>
                     </td>`;
             } else if (mode === 'completed') {
+                const narrationBtn = (t.narration && t.narration.text)
+                    ? `<button type="button" class="btn-icon" data-action="copy-narration" data-id="${idAttr}" title="Copy Tally Narration">${this.SVGS.copy}</button>` : '';
                 row.innerHTML = `
                     <td class="td-clip">${this.formatDateStr(t.dateLogged, { day: 'numeric', month: 'short', year: 'numeric' })}</td>
                     <td class="td-task">${descHtml}</td>
@@ -2652,6 +3403,7 @@ const app = {
                     <td class="td-clip">${this.formatDateStr(t.completedDate || this.getLocalDateStr(new Date()))}</td>
                     <td class="action-cell">
                         ${viewMailBtn}
+                        ${narrationBtn}
                         <button type="button" class="btn-icon warn" data-action="reopen" data-id="${idAttr}" title="Reopen Task">${this.SVGS.reopen}</button>
                         <button type="button" class="btn-icon bad" data-action="bin" data-id="${idAttr}" title="Move to Bin">${this.SVGS.bin}</button>
                     </td>`;
@@ -2701,6 +3453,9 @@ const app = {
             if (t.priority) chips.push(`<span class="chip pri-${this.escAttr(String(t.priority).replace(/\s+/g, '-'))}">${this.sanitize(t.priority)}</span>`);
             if (t.category) chips.push(`<span class="chip cat">${this.sanitize(t.category)}</span>`);
             if (t.recurrence && t.recurrence !== 'None') chips.push(`<span class="chip rec">${this.sanitize(t.recurrence)}</span>`);
+            if (Array.isArray(t.skippedDates) && t.skippedDates.indexOf(this.getLocalDateStr(new Date())) !== -1) {
+                chips.push(`<span class="skip-badge" title="Marked as not done today from the Past Due Alert">Skipped today</span>`);
+            }
             if (t.pendingWith) chips.push(`<span class="chip person">${this.sanitize(t.pendingWith)}</span>`);
             if (t.mailChain) chips.push(`<button type="button" class="chip mail" data-action="copy-mail" data-id="${idAttr}" title="${this.escAttr(t.mailChain)}">${this.SVGS.copy}<span class="chip-txt">${this.sanitize(t.mailChain)}</span></button>`);
 
@@ -2738,6 +3493,8 @@ const app = {
                     </div>
                     </div>`;
             } else if (mode === 'completed') {
+                const narrationBtn = (t.narration && t.narration.text)
+                    ? `<button type="button" class="btn-icon" data-action="copy-narration" data-id="${idAttr}" title="Copy Tally Narration">${this.SVGS.copy}</button>` : '';
                 card.innerHTML = `
                     <div class="tcard-title">${this.sanitize(t.description)}</div>
                     <div class="tcard-body">
@@ -2746,6 +3503,7 @@ const app = {
                         <span class="tcard-due">Completed ${this.formatDateStr(t.completedDate || this.getLocalDateStr(new Date()), { day: 'numeric', month: 'short' })}</span>
                         <div class="tcard-actions">
                             ${mailBtn}
+                            ${narrationBtn}
                             <button type="button" class="btn-icon warn" data-action="reopen" data-id="${idAttr}" title="Reopen Task">${this.SVGS.reopen}</button>
                             <button type="button" class="btn-icon bad" data-action="bin" data-id="${idAttr}" title="Move to Bin">${this.SVGS.bin}</button>
                         </div>
@@ -2835,13 +3593,17 @@ const app = {
             this.setSelectValue('taskPendingWith', t.pendingWith || '');
             document.getElementById('taskDueDate').value = t.dueDate || '';
             document.getElementById('taskDueTime').value = t.dueTime || '';
+            document.getElementById('taskDeadlineDate').value = t.deadlineDate || '';
+            document.getElementById('taskDeadlineTime').value = t.deadlineTime || '';
             document.getElementById('taskMailChain').value = t.mailChain || '';
             document.getElementById('taskRecurrence').value = t.recurrence || 'None';
             document.getElementById('taskNotes').value = t.notes || '';
+            this.renderKeyPoints(t.keyPoints || []);
             if (delBtn) delBtn.style.display = t.deleted ? 'none' : '';
         } else {
             this.editingId = null;
             this.storedEmailId = emailIdForNew || null;
+            this.renderKeyPoints([]);
 
             document.getElementById('modalTitle').textContent = 'New Entry';
             const pri = this.lists.priorities.indexOf('Medium') !== -1 ? 'Medium' : (this.lists.priorities[0] || '');
@@ -2852,6 +3614,10 @@ const app = {
             if (delBtn) delBtn.style.display = 'none';
         }
 
+        this.renderPaymentDetails(hasId ? (this.findTask(id) || {}).paymentDetails : {});
+        this.setSelectValue('taskSubCategory', hasId ? (this.findTask(id) || {}).subCategory : '');
+        this.renderSubCategoryFields(hasId ? (this.findTask(id) || {}).subCategoryFields : {});
+        this.renderNarrationFields(hasId ? (this.findTask(id) || {}).narration : null);
         if (mailBtn) mailBtn.style.display = this.storedEmailId ? '' : 'none';
         this.checkDueHoliday();
         this.checkSlotAvailability();
@@ -2873,6 +3639,591 @@ const app = {
         this.storedEmailId = null;
     },
 
+    /* ---------- KEY POINTS (structured key/value fields per task, used
+       as extra context for the AI daily report) ---------- */
+    renderKeyPoints(points) {
+        const box = document.getElementById('taskKeyPoints');
+        if (!box) return;
+        box.innerHTML = '';
+        (points || []).forEach(p => this.addKeyPointRow(p.key || '', p.value || ''));
+    },
+
+    addKeyPointRow(key = '', value = '') {
+        const box = document.getElementById('taskKeyPoints');
+        if (!box) return;
+        const row = document.createElement('div');
+        row.className = 'keypoint-row';
+        row.innerHTML = `
+            <input type="text" class="kp-key" placeholder="Key (e.g. Amount)" value="${this.escAttr(key)}">
+            <input type="text" class="kp-value" placeholder="Value (e.g. ₹50,000)" value="${this.escAttr(value)}">
+            <button type="button" class="btn-icon bad kp-remove" onclick="this.closest('.keypoint-row').remove()" title="Remove">${this.SVGS.bin}</button>
+        `;
+        box.appendChild(row);
+    },
+
+    collectKeyPoints() {
+        const box = document.getElementById('taskKeyPoints');
+        if (!box) return [];
+        return Array.from(box.querySelectorAll('.keypoint-row')).map(row => ({
+            key: row.querySelector('.kp-key').value.trim(),
+            value: row.querySelector('.kp-value').value.trim()
+        })).filter(p => p.key || p.value);
+    },
+
+    /* ---------- CONDITIONAL PAYMENT FIELDS ----------
+       Domestic Payment + Completed → PO Number / Invoice(s) / Narration.
+       Import Payment + In Progress → Payment % / Payment Type / Payment
+       Against. Matched loosely (case-insensitive, keyword-based) so this
+       still works whatever the exact category names in your list are. ---------- */
+    isDomesticPaymentCategory(cat) {
+        return /domestic/i.test(cat || '') && /payment/i.test(cat || '');
+    },
+
+    isImportPaymentCategory(cat) {
+        return /import/i.test(cat || '') && /payment/i.test(cat || '');
+    },
+
+    isUrgentPaymentCategory(cat) {
+        return /urgent/i.test(cat || '') && /payment/i.test(cat || '');
+    },
+
+    // Whether a category was opted into showing a Sub Category — decided at
+    // category-creation time in the category editor (Manage Categories),
+    // not guessed from the category name.
+    categoryHasSubCategory(cat) {
+        if (!cat) return false;
+        return (this.lists.subCategoryCategories || []).indexOf(cat) !== -1;
+    },
+
+    // True once a task's Sub Category (and every field its rule requires)
+    // has actually been filled in — or the category doesn't need one at all.
+    subCategoryComplete(t) {
+        if (!t || !this.categoryHasSubCategory(t.category)) return true;
+        if (!t.subCategory) return false;
+        const sc = (this.lists.subCategories || []).find(x => x.name === t.subCategory);
+        if (!sc || !sc.fields || !sc.fields.length) return true;
+        const vals = t.subCategoryFields || {};
+        return sc.fields.every(f => (vals[f.label] || '').toString().trim() !== '');
+    },
+
+    updateConditionalFields() {
+        const cat = document.getElementById('taskCategory').value;
+        const status = document.getElementById('taskStatus').value;
+        const statusNorm = String(status || '').trim().toLowerCase();
+
+        const importBox = document.getElementById('importInProgressFields');
+        const subCategoryBox = document.getElementById('subCategoryField');
+        const narrationBox = document.getElementById('tallyNarrationBox');
+
+        const showImport = this.isImportPaymentCategory(cat) && statusNorm === 'in progress';
+        // A category's Sub Category only needs filling in once the entry is
+        // actually being marked Completed / Done — not while it's still
+        // open — so it stays out of the way until it's actually required.
+        // Which fields it asks for (PO No, Invoice No, or anything else) is
+        // entirely up to what the user defined for it in Manage Sub
+        // Categories — nothing is required by default here.
+        const showSubCategory = this.categoryHasSubCategory(cat) && statusNorm === 'completed';
+        // Tally Narration is offered on every payment, whatever its
+        // category — same "at completion" timing as Sub Category, but
+        // never required unless a Narration Type is actually picked.
+        const showNarration = statusNorm === 'completed';
+
+        if (importBox) importBox.style.display = showImport ? '' : 'none';
+        if (subCategoryBox) subCategoryBox.style.display = showSubCategory ? '' : 'none';
+        if (narrationBox) narrationBox.style.display = showNarration ? '' : 'none';
+
+        // A hidden condition's old values must not silently ride along on
+        // save just because the category/status changed after they were
+        // filled in — clear whatever no longer applies.
+        if (!showImport) {
+            document.getElementById('pdPaymentPercent').value = '';
+            this.setSelectValue('pdPaymentType', '');
+            this.setSelectValue('pdPaymentAgainst', '');
+        }
+        if (!showSubCategory) {
+            this.setSelectValue('taskSubCategory', '');
+            const ruleBox = document.getElementById('subCategoryRuleFields');
+            if (ruleBox) ruleBox.innerHTML = '';
+        }
+        if (!showNarration) {
+            this.setSelectValue('taskNarrationType', '');
+            document.getElementById('narrationPercent').value = '';
+            document.getElementById('narrationDocNo').value = '';
+            document.getElementById('narrationPurpose').value = '';
+            document.getElementById('narrationPreview').value = '';
+            const wrap = document.getElementById('narrationFieldsWrap');
+            if (wrap) wrap.style.display = 'none';
+        }
+    },
+
+    renderPaymentDetails(pd) {
+        pd = pd || {};
+        document.getElementById('pdPaymentPercent').value = pd.paymentPercent || '';
+        this.setSelectValue('pdPaymentType', pd.paymentType || '');
+        this.setSelectValue('pdPaymentAgainst', pd.paymentAgainst || '');
+        this.updateConditionalFields();
+    },
+
+    collectPaymentDetails() {
+        return {
+            paymentPercent: document.getElementById('pdPaymentPercent').value.trim(),
+            paymentType: document.getElementById('pdPaymentType').value,
+            paymentAgainst: document.getElementById('pdPaymentAgainst').value
+        };
+    },
+
+    /* ---------- SUB CATEGORY RULES: each sub category can define its own
+       extra fields (e.g. "PO Advance Payment" → PO No + Type of Advance),
+       set up once when the sub category itself is created/edited. ---------- */
+    openSubCategoryRules() {
+        this.editingScrId = null;
+        this.resetScrForm();
+        this.renderSubCategoryRulesList();
+        document.getElementById('subCategoryRulesModal').classList.add('open');
+    },
+
+    closeSubCategoryRules() {
+        document.getElementById('subCategoryRulesModal').classList.remove('open');
+    },
+
+    resetScrForm() {
+        this.editingScrId = null;
+        document.getElementById('scrName').value = '';
+        document.getElementById('scrFieldRows').innerHTML = '';
+    },
+
+    addScrFieldRow(label = '', options = []) {
+        const box = document.getElementById('scrFieldRows');
+        if (!box) return;
+        const row = document.createElement('div');
+        row.className = 'keypoint-row scr-field-row';
+        row.innerHTML = `
+            <input type="text" class="kp-key scr-field-label" placeholder="Field label (e.g. PO No)" value="${this.escAttr(label)}">
+            <input type="text" class="kp-value scr-field-options" placeholder="Options, comma separated (blank = plain text)" value="${this.escAttr((options || []).join(', '))}">
+            <button type="button" class="btn-icon bad" onclick="this.closest('.scr-field-row').remove()" title="Remove">${this.SVGS.bin}</button>
+        `;
+        box.appendChild(row);
+    },
+
+    renderSubCategoryRulesList() {
+        const box = document.getElementById('subCategoryRulesList');
+        if (!box) return;
+        const items = this.lists.subCategories || [];
+        if (!items.length) {
+            box.innerHTML = '<div class="empty-state" style="padding:14px;"><span>No sub categories yet — add one below.</span></div>';
+            return;
+        }
+        box.innerHTML = items.map(sc => {
+            const summary = (sc.fields || []).map(f => f.label).join(', ') || 'No extra fields';
+            return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:700; font-size:0.88rem; color:var(--label);">${this.sanitize(sc.name)}</div>
+                    <div style="font-size:0.76rem; color:var(--label-2);">${this.sanitize(summary)}</div>
+                </div>
+                <button type="button" class="btn-icon" onclick="app.editSubCategoryRule('${this.escAttr(sc.id)}')" title="Edit">${this.SVGS.edit}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteSubCategoryRule('${this.escAttr(sc.id)}')" title="Delete">${this.SVGS.bin}</button>
+            </div>`;
+        }).join('');
+    },
+
+    editSubCategoryRule(id) {
+        const sc = (this.lists.subCategories || []).find(x => String(x.id) === String(id));
+        if (!sc) return;
+        this.editingScrId = sc.id;
+        document.getElementById('scrName').value = sc.name;
+        document.getElementById('scrFieldRows').innerHTML = '';
+        (sc.fields || []).forEach(f => this.addScrFieldRow(f.label, f.options || []));
+    },
+
+    collectScrFields() {
+        return Array.from(document.querySelectorAll('#scrFieldRows .scr-field-row')).map(row => {
+            const label = row.querySelector('.scr-field-label').value.trim();
+            const optsRaw = row.querySelector('.scr-field-options').value.trim();
+            const options = optsRaw ? optsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            return { label, options };
+        }).filter(f => f.label);
+    },
+
+    saveSubCategoryRule() {
+        const name = document.getElementById('scrName').value.trim();
+        if (!name) { this.showToast('Give the sub category a name.', 'warning'); return; }
+        const fields = this.collectScrFields();
+        if (!Array.isArray(this.lists.subCategories)) this.lists.subCategories = [];
+
+        if (this.editingScrId) {
+            const sc = this.lists.subCategories.find(x => String(x.id) === String(this.editingScrId));
+            if (sc) { sc.name = name; sc.fields = fields; }
+        } else {
+            if (this.lists.subCategories.some(x => x.name.toLowerCase() === name.toLowerCase())) {
+                this.showToast('A sub category with that name already exists.', 'warning');
+                return;
+            }
+            this.lists.subCategories.push({ id: this.newId(), name, fields });
+        }
+
+        this.saveLists();
+        this.resetScrForm();
+        this.renderSubCategoryRulesList();
+        this.showToast('Sub category saved.', 'success');
+    },
+
+    deleteSubCategoryRule(id) {
+        if (!confirm('Delete this sub category and its rule fields?')) return;
+        this.lists.subCategories = (this.lists.subCategories || []).filter(x => String(x.id) !== String(id));
+        this.saveLists();
+        this.renderSubCategoryRulesList();
+        this.showToast('Sub category removed.', 'success');
+    },
+
+    // Task-modal side: shows whatever extra fields the CURRENTLY selected
+    // sub category defines, prefilled from an existing task if editing.
+    renderSubCategoryFields(prefill) {
+        const name = document.getElementById('taskSubCategory').value;
+        const box = document.getElementById('subCategoryRuleFields');
+        if (!box) return;
+        box.innerHTML = '';
+        const sc = (this.lists.subCategories || []).find(x => x.name === name);
+        if (!sc || !sc.fields || !sc.fields.length) return;
+
+        const values = prefill || {};
+        sc.fields.forEach(f => {
+            const val = values[f.label] || '';
+            const row = document.createElement('div');
+            row.className = 'form-group scr-value-row';
+            if (f.options && f.options.length) {
+                row.innerHTML = `<label>${this.sanitize(f.label)}</label>
+                    <select class="scr-value-input" data-label="${this.escAttr(f.label)}" onchange="app.updateNarrationPreview()">
+                        <option value="">Select</option>
+                        ${f.options.map(o => `<option value="${this.escAttr(o)}" ${o === val ? 'selected' : ''}>${this.sanitize(o)}</option>`).join('')}
+                    </select>`;
+            } else {
+                row.innerHTML = `<label>${this.sanitize(f.label)}</label>
+                    <input type="text" class="scr-value-input" data-label="${this.escAttr(f.label)}" value="${this.escAttr(val)}" oninput="app.updateNarrationPreview()">`;
+            }
+            box.appendChild(row);
+        });
+    },
+
+    collectSubCategoryFields() {
+        const box = document.getElementById('subCategoryRuleFields');
+        if (!box) return {};
+        const out = {};
+        box.querySelectorAll('.scr-value-input').forEach(el => {
+            if (el.value) out[el.dataset.label] = el.value;
+        });
+        return out;
+    },
+
+    /* ---------- TALLY NARRATION ----------
+       Builds the accounting-entry sentence Tally needs for a payment,
+       straight from the same New Entry screen: "Being " + an optional % +
+       a fixed phrase (per narration type) + the document number entered at
+       completion + any extra fields the type defines + an optional note +
+       whatever the entry's Sub Category fields hold + the Mail Chain
+       already captured when the task was first created. A type can also
+       name one of its extra fields as the "lead field" (e.g. Vendor
+       Name) — when set, the narration becomes "<lead value> : ..."
+       instead of "Being ...", and the Mail Chain is left out entirely.
+       Optional — only used when a Narration Type is picked; skipped
+       entirely otherwise. ---------- */
+    openNarrationRules() {
+        this.editingNrId = null;
+        this.resetNrForm();
+        this.renderNarrationRulesList();
+        document.getElementById('narrationRulesModal').classList.add('open');
+    },
+
+    closeNarrationRules() {
+        document.getElementById('narrationRulesModal').classList.remove('open');
+    },
+
+    resetNrForm() {
+        this.editingNrId = null;
+        document.getElementById('nrName').value = '';
+        document.getElementById('nrHasPercent').checked = false;
+        document.getElementById('nrPhrase').value = '';
+        document.getElementById('nrDocLabel').value = '';
+        document.getElementById('nrFieldRows').innerHTML = '';
+    },
+
+    addNrFieldRow(label = '', options = [], isLead = false) {
+        const box = document.getElementById('nrFieldRows');
+        if (!box) return;
+        const row = document.createElement('div');
+        row.className = 'keypoint-row nr-field-row';
+        row.innerHTML = `
+            <input type="text" class="kp-key nr-field-label" placeholder="Field label (e.g. Vendor Name)" value="${this.escAttr(label)}">
+            <input type="text" class="kp-value nr-field-options" placeholder="Options, comma separated (blank = plain text)" value="${this.escAttr((options || []).join(', '))}">
+            <label style="display:flex; align-items:center; gap:4px; font-size:0.68rem; color:var(--label-2); white-space:nowrap; cursor:pointer; flex:0 0 auto;" title="Lead field: shown first as '&lt;value&gt; : ...' instead of 'Being ...', and the Mail Chain is left out">
+                <input type="radio" name="nrLeadField" class="nr-field-lead" style="width:auto;" ${isLead ? 'checked' : ''}> Lead
+            </label>
+            <button type="button" class="btn-icon bad" onclick="this.closest('.nr-field-row').remove()" title="Remove">${this.SVGS.bin}</button>
+        `;
+        box.appendChild(row);
+    },
+
+    renderNarrationRulesList() {
+        const box = document.getElementById('narrationRulesList');
+        if (!box) return;
+        const items = this.lists.narrationTypes || [];
+        if (!items.length) {
+            box.innerHTML = '<div class="empty-state" style="padding:14px;"><span>No narration types yet — add one below.</span></div>';
+            return;
+        }
+        box.innerHTML = items.map(nr => {
+            const extra = (nr.fields || []).map(f => f.label + (f.label === nr.leadFieldLabel ? ' (lead)' : '')).join(', ');
+            return `
+            <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:700; font-size:0.88rem; color:var(--label);">${this.sanitize(nr.name)}</div>
+                    <div style="font-size:0.76rem; color:var(--label-2);">Being ${nr.hasPercent ? '[%] ' : ''}${this.sanitize(nr.phrase)}[${this.sanitize(nr.docLabel)}]${extra ? ' · Fields: ' + this.sanitize(extra) : ''}</div>
+                </div>
+                <button type="button" class="btn-icon" onclick="app.editNarrationRule('${this.escAttr(nr.id)}')" title="Edit">${this.SVGS.edit}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteNarrationRule('${this.escAttr(nr.id)}')" title="Delete">${this.SVGS.bin}</button>
+            </div>`;
+        }).join('');
+    },
+
+    editNarrationRule(id) {
+        const nr = (this.lists.narrationTypes || []).find(x => String(x.id) === String(id));
+        if (!nr) return;
+        this.editingNrId = nr.id;
+        document.getElementById('nrName').value = nr.name;
+        document.getElementById('nrHasPercent').checked = !!nr.hasPercent;
+        document.getElementById('nrPhrase').value = nr.phrase;
+        document.getElementById('nrDocLabel').value = nr.docLabel;
+        document.getElementById('nrFieldRows').innerHTML = '';
+        (nr.fields || []).forEach(f => this.addNrFieldRow(f.label, f.options || [], f.label === nr.leadFieldLabel));
+    },
+
+    collectNrFields() {
+        return Array.from(document.querySelectorAll('#nrFieldRows .nr-field-row')).map(row => {
+            const label = row.querySelector('.nr-field-label').value.trim();
+            const optsRaw = row.querySelector('.nr-field-options').value.trim();
+            const options = optsRaw ? optsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            const isLead = row.querySelector('.nr-field-lead').checked;
+            return { label, options, isLead };
+        }).filter(f => f.label);
+    },
+
+    saveNarrationRule() {
+        const name = document.getElementById('nrName').value.trim();
+        if (!name) { this.showToast('Give the narration type a name.', 'warning'); return; }
+        const hasPercent = document.getElementById('nrHasPercent').checked;
+        const phrase = document.getElementById('nrPhrase').value;
+        const docLabel = document.getElementById('nrDocLabel').value.trim() || 'Document No';
+        const collected = this.collectNrFields();
+        const fields = collected.map(f => ({ label: f.label, options: f.options }));
+        const lead = collected.find(f => f.isLead);
+        const leadFieldLabel = lead ? lead.label : '';
+        if (!Array.isArray(this.lists.narrationTypes)) this.lists.narrationTypes = [];
+
+        if (this.editingNrId) {
+            const nr = this.lists.narrationTypes.find(x => String(x.id) === String(this.editingNrId));
+            if (nr) { nr.name = name; nr.hasPercent = hasPercent; nr.phrase = phrase; nr.docLabel = docLabel; nr.fields = fields; nr.leadFieldLabel = leadFieldLabel; }
+        } else {
+            if (this.lists.narrationTypes.some(x => x.name.toLowerCase() === name.toLowerCase())) {
+                this.showToast('A narration type with that name already exists.', 'warning');
+                return;
+            }
+            this.lists.narrationTypes.push({ id: this.newId(), name, hasPercent, phrase, docLabel, fields, leadFieldLabel });
+        }
+
+        this.saveLists();
+        this.resetNrForm();
+        this.renderNarrationRulesList();
+        this.showToast('Narration type saved.', 'success');
+    },
+
+    deleteNarrationRule(id) {
+        if (!confirm('Delete this narration type?')) return;
+        this.lists.narrationTypes = (this.lists.narrationTypes || []).filter(x => String(x.id) !== String(id));
+        this.saveLists();
+        this.renderNarrationRulesList();
+        this.showToast('Narration type removed.', 'success');
+    },
+
+    // Task-modal side: shows/hides the % field, updates the document
+    // label, and rebuilds the extra-fields inputs for whichever Narration
+    // Type is currently selected.
+    onNarrationTypeChange() {
+        const name = document.getElementById('taskNarrationType').value;
+        const wrap = document.getElementById('narrationFieldsWrap');
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === name);
+        if (wrap) wrap.style.display = nr ? '' : 'none';
+        const pctGroup = document.getElementById('narrationPercentGroup');
+        if (pctGroup) pctGroup.style.display = (nr && nr.hasPercent) ? '' : 'none';
+        const docLabelEl = document.getElementById('narrationDocLabel');
+        if (docLabelEl) docLabelEl.textContent = nr ? nr.docLabel : 'Document No';
+        const docInput = document.getElementById('narrationDocNo');
+        if (docInput) docInput.placeholder = nr ? ('e.g. ' + nr.docLabel) : '';
+        this.renderNarrationExtraFields(nr);
+        this.updateNarrationPreview();
+    },
+
+    // Shows whatever extra fields the CURRENTLY selected Narration Type
+    // defines (e.g. Vendor Name), prefilled if editing an existing task.
+    renderNarrationExtraFields(nr, prefillValues) {
+        const box = document.getElementById('narrationExtraFieldsWrap');
+        if (!box) return;
+        box.innerHTML = '';
+        if (!nr || !nr.fields || !nr.fields.length) return;
+        const values = prefillValues || {};
+        nr.fields.forEach(f => {
+            const val = values[f.label] || '';
+            const row = document.createElement('div');
+            row.className = 'form-group nr-value-row';
+            if (f.options && f.options.length) {
+                row.innerHTML = `<label>${this.sanitize(f.label)}</label>
+                    <select class="nr-value-input" data-label="${this.escAttr(f.label)}" onchange="app.updateNarrationPreview()">
+                        <option value="">Select</option>
+                        ${f.options.map(o => `<option value="${this.escAttr(o)}" ${o === val ? 'selected' : ''}>${this.sanitize(o)}</option>`).join('')}
+                    </select>`;
+            } else {
+                row.innerHTML = `<label>${this.sanitize(f.label)}</label>
+                    <input type="text" class="nr-value-input" data-label="${this.escAttr(f.label)}" value="${this.escAttr(val)}" oninput="app.updateNarrationPreview()">`;
+            }
+            box.appendChild(row);
+        });
+    },
+
+    collectNarrationExtraFields() {
+        const box = document.getElementById('narrationExtraFieldsWrap');
+        if (!box) return {};
+        const out = {};
+        box.querySelectorAll('.nr-value-input').forEach(el => { if (el.value) out[el.dataset.label] = el.value; });
+        return out;
+    },
+
+    // What the currently-selected Sub Category's fields add to the
+    // narration — "Label: value, Label: value" — read live from the form.
+    currentSubCategoryFieldsText() {
+        const el = document.getElementById('taskSubCategory');
+        const name = el ? el.value : '';
+        const sc = (this.lists.subCategories || []).find(x => x.name === name);
+        if (!sc || !sc.fields || !sc.fields.length) return '';
+        const vals = this.collectSubCategoryFields();
+        return sc.fields.map(f => {
+            const v = (vals[f.label] || '').toString().trim();
+            return v ? (f.label + ': ' + v) : '';
+        }).filter(Boolean).join(', ');
+    },
+
+    // Pure builder. Standard form: "Being " + [%] + fixed phrase + doc no +
+    // [extra fields] + [note] + [sub category fields] + Mail Chain. If the
+    // type names a lead field and it has a value, that becomes
+    // "<value> : " up front instead of "Being ...", and Mail Chain is left
+    // off entirely.
+    buildNarrationText(nr, percent, docNo, purpose, mailChain, fieldsValues, subCategoryText) {
+        if (!nr) return '';
+        fieldsValues = fieldsValues || {};
+
+        const extraBits = (nr.fields || [])
+            .filter(f => f.label !== nr.leadFieldLabel)
+            .map(f => (fieldsValues[f.label] || '').toString().trim())
+            .filter(Boolean);
+
+        let middle = (nr.phrase || '') + String(docNo || '').trim();
+        [extraBits.join(' '), String(purpose || '').trim(), String(subCategoryText || '').trim()]
+            .filter(Boolean)
+            .forEach(bit => { middle += ' ' + bit; });
+
+        const leadValue = nr.leadFieldLabel ? (fieldsValues[nr.leadFieldLabel] || '').toString().trim() : '';
+        if (nr.leadFieldLabel && leadValue) {
+            const pct = (nr.hasPercent && String(percent || '').trim()) ? String(percent).trim() + '% ' : '';
+            return leadValue + ' : ' + pct + middle;
+        }
+
+        let text = 'Being ';
+        if (nr.hasPercent && String(percent || '').trim()) text += String(percent).trim() + '% ';
+        text += middle;
+        if (String(mailChain || '').trim()) text += ' ' + String(mailChain).trim();
+        return text;
+    },
+
+    updateNarrationPreview() {
+        const preview = document.getElementById('narrationPreview');
+        if (!preview) return;
+        const name = document.getElementById('taskNarrationType').value;
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === name);
+        const mailChain = document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value : '';
+        preview.value = nr ? this.buildNarrationText(
+            nr,
+            document.getElementById('narrationPercent') ? document.getElementById('narrationPercent').value : '',
+            document.getElementById('narrationDocNo') ? document.getElementById('narrationDocNo').value : '',
+            document.getElementById('narrationPurpose') ? document.getElementById('narrationPurpose').value : '',
+            mailChain,
+            this.collectNarrationExtraFields(),
+            this.currentSubCategoryFieldsText()
+        ) : '';
+    },
+
+    // Reads the form into a narration object to store on the task, or null
+    // if no Narration Type is selected (the feature is entirely optional).
+    collectNarration() {
+        const name = document.getElementById('taskNarrationType') ? document.getElementById('taskNarrationType').value : '';
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === name);
+        if (!nr) return null;
+        const percent = document.getElementById('narrationPercent') ? document.getElementById('narrationPercent').value.trim() : '';
+        const docNo = document.getElementById('narrationDocNo') ? document.getElementById('narrationDocNo').value.trim() : '';
+        const purpose = document.getElementById('narrationPurpose') ? document.getElementById('narrationPurpose').value.trim() : '';
+        const mailChain = document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value.trim() : '';
+        const fieldsValues = this.collectNarrationExtraFields();
+        const subCategoryText = this.currentSubCategoryFieldsText();
+        return {
+            typeId: nr.id, typeName: nr.name, percent, docNo, purpose, fieldsValues,
+            // Full text (with Mail Chain) for Tally / Copy Narration.
+            text: this.buildNarrationText(nr, percent, docNo, purpose, mailChain, fieldsValues, subCategoryText),
+            // Same narration without the Mail Chain — what the Daily
+            // Activity Report actually uses (see reportDetailsFor).
+            reportText: this.buildNarrationText(nr, percent, docNo, purpose, '', fieldsValues, subCategoryText)
+        };
+    },
+
+    // Task-modal side: prefills the Narration Type + its fields when editing
+    // an entry that already has one.
+    renderNarrationFields(narration) {
+        this.setSelectValue('taskNarrationType', narration ? narration.typeName : '');
+        this.onNarrationTypeChange();
+        document.getElementById('narrationPercent').value = narration ? (narration.percent || '') : '';
+        document.getElementById('narrationDocNo').value = narration ? (narration.docNo || '') : '';
+        document.getElementById('narrationPurpose').value = narration ? (narration.purpose || '') : '';
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === (narration && narration.typeName));
+        this.renderNarrationExtraFields(nr, narration ? narration.fieldsValues : {});
+        this.updateNarrationPreview();
+    },
+
+    // Returns an error message if a required conditional field is missing
+    // for the category+status combo currently selected, or '' if fine.
+    validatePaymentDetails(fields) {
+        if (this.isImportPaymentCategory(fields.category) && String(fields.status).trim().toLowerCase() === 'in progress') {
+            const pd = this.collectPaymentDetails();
+            if (!pd.paymentPercent || !pd.paymentType || !pd.paymentAgainst) {
+                return 'Import Payment marked In Progress needs Payment %, Payment Type, and Payment Against.';
+            }
+        }
+        if (this.categoryHasSubCategory(fields.category) && String(fields.status).trim().toLowerCase() === 'completed') {
+            if (!fields.subCategory) return 'Select a Sub Category before marking this Completed.';
+            const sc = (this.lists.subCategories || []).find(x => x.name === fields.subCategory);
+            if (sc && sc.fields && sc.fields.length) {
+                const missing = sc.fields.filter(f => !((fields.subCategoryFields || {})[f.label] || '').toString().trim());
+                if (missing.length) return 'Fill in ' + missing.map(f => f.label).join(', ') + ' before marking this Completed.';
+            }
+        }
+        // Tally Narration is opt-in — only enforced once a Narration Type
+        // has actually been picked, so it never blocks a non-payment entry.
+        if (fields.narration) {
+            const nr = (this.lists.narrationTypes || []).find(x => x.id === fields.narration.typeId);
+            if (!fields.narration.docNo) return 'Enter the ' + ((nr && nr.docLabel) || 'document number') + ' for the Tally Narration, or clear the Narration Type.';
+            if (nr && nr.hasPercent && !fields.narration.percent) return 'Enter the % for the Tally Narration.';
+            if (nr && nr.fields && nr.fields.length) {
+                const missing = nr.fields.filter(f => !((fields.narration.fieldsValues || {})[f.label] || '').toString().trim());
+                if (missing.length) return 'Fill in ' + missing.map(f => f.label).join(', ') + ' for the Tally Narration.';
+            }
+        }
+        return '';
+    },
+
     saveTask(e) {
         if (e && e.preventDefault) e.preventDefault();
 
@@ -2882,16 +4233,26 @@ const app = {
         const fields = {
             description: desc,
             category: document.getElementById('taskCategory').value,
+            subCategory: document.getElementById('taskSubCategory') ? document.getElementById('taskSubCategory').value : '',
             priority: document.getElementById('taskPriority').value,
             status: document.getElementById('taskStatus').value || 'Pending',
             pendingWith: document.getElementById('taskPendingWith').value,
             dueDate: document.getElementById('taskDueDate').value,
             dueTime: document.getElementById('taskDueTime').value,
+            deadlineDate: document.getElementById('taskDeadlineDate').value,
+            deadlineTime: document.getElementById('taskDeadlineTime').value,
             mailChain: document.getElementById('taskMailChain').value.trim(),
             recurrence: document.getElementById('taskRecurrence').value || 'None',
             notes: document.getElementById('taskNotes').value,
+            keyPoints: this.collectKeyPoints(),
+            paymentDetails: this.collectPaymentDetails(),
+            subCategoryFields: this.collectSubCategoryFields(),
+            narration: this.collectNarration(),
             updatedAt: Date.now()
         };
+
+        const paymentError = this.validatePaymentDetails(fields);
+        if (paymentError) { this.showToast(paymentError, 'warning'); return; }
 
         const clash = this.slotClash(fields.dueDate, fields.dueTime, this.editingId);
         if (clash) {
@@ -2913,14 +4274,27 @@ const app = {
             if (!task) { this.showToast('That entry is no longer available.', 'error'); this.closeTaskModal(); return; }
 
             const dueChanged = (task.dueDate || '') !== fields.dueDate || (task.dueTime || '') !== fields.dueTime;
+            const deadlineChanged = (task.deadlineDate || '') !== fields.deadlineDate || (task.deadlineTime || '') !== fields.deadlineTime;
+            const oldStatus = task.status;
+            const statusChanged = oldStatus !== fields.status;
             Object.assign(task, fields);
             if (dueChanged) { task.lastAckDate = null; task.snoozeUntil = null; }
+            if (deadlineChanged) { task.deadlineAckDate = null; }
             if (this.storedEmailId) task.emailId = this.storedEmailId;
 
             if (task.status === 'Completed') {
                 if (!task.completedDate) task.completedDate = todayStr;
             } else {
                 task.completedDate = null;
+            }
+
+            // Any real status move (not landing back on "Not yet started")
+            // is a day's work worth reporting — completing it is just one
+            // case of that, so it goes through the same "status-changed"
+            // log rather than needing markComplete() to have been used.
+            if (statusChanged && !this.isUnstartedStatus(fields.status)) {
+                this.logTaskActivity(task, fields.status === 'Completed' ? 'completed' : 'status-changed',
+                    this.reportDetailsFor(task, 'Status changed from "' + (oldStatus || '—') + '" to "' + fields.status + '"'));
             }
         } else {
             const task = Object.assign({
@@ -2931,10 +4305,18 @@ const app = {
                 completedDate: null,
                 lastAckDate: null,
                 snoozeUntil: null,
+                deadlineAckDate: null,
                 emailId: this.storedEmailId || null
             }, fields);
             if (task.status === 'Completed') task.completedDate = todayStr;
             this.tasks.push(task);
+            // A brand-new entry isn't "work done today" by itself — unless
+            // it was logged already at a real (non-"Not yet started")
+            // status, which is itself that day's status.
+            if (!this.isUnstartedStatus(task.status)) {
+                this.logTaskActivity(task, task.status === 'Completed' ? 'completed' : 'status-changed',
+                    this.reportDetailsFor(task, 'Logged with status "' + task.status + '"'));
+            }
         }
 
         this.closeTaskModal();
@@ -2989,6 +4371,32 @@ const app = {
         });
     },
 
+    // Entry point for every "quick done" gesture (table button, swipe, drag,
+    // the alarm popup's Mark done). If the category needs a Sub Category,
+    // its fields must be filled in first: open the entry so they can be
+    // entered, instead of silently marking it done without them.
+    tryCompleteTask(id) {
+        const t = this.findTask(id);
+        if (!t) return;
+        if (!this.subCategoryComplete(t)) {
+            // Silence any active overdue alert for today so it doesn't pop
+            // back up while the required fields are being filled in.
+            t.lastAckDate = this.getLocalDateStr(new Date());
+            t.updatedAt = Date.now();
+            this.saveData();
+            if (this.isAlarming) this.stopPersistentAlarm(false);
+
+            this.openTaskModal(id);
+            this.setSelectValue('taskStatus', 'Completed');
+            this.updateConditionalFields();
+            this.setSelectValue('taskSubCategory', t.subCategory || '');
+            this.renderSubCategoryFields(t.subCategoryFields || {});
+            this.showToast('Select a Sub Category and fill in its details, then save to mark this done.', 'warning');
+            return;
+        }
+        this.markComplete(id);
+    },
+
     markComplete(id) {
         const t = this.findTask(id);
         if (!t) return;
@@ -3008,12 +4416,37 @@ const app = {
         this.saveData();
         this.renderTable();
         this.processEngine();
+        // Narration first, then Notes (which already picked up any remark
+        // typed in the Past Due Alert) — see reportDetailsFor.
+        this.logTaskActivity(t, 'completed', this.reportDetailsFor(t));
         this.showToast(
             repeat ? 'Done — next occurrence scheduled.' : 'Marked complete.',
             'success',
             { label: 'Undo', onClick: () => this.undoComplete(id, repeat ? repeat.id : null) }
         );
         this.syncToGoogleSheets();
+    },
+
+    // "Skip" from the Past Due Alert: today's work was NOT done — this is
+    // NOT a completion. The task stays exactly as it was (still open,
+    // still overdue) so it can be finished — and counted — on whatever
+    // day that actually happens; it's just silenced for today and marked
+    // as skipped so today's Daily Activity Report can never include it
+    // (nothing is logged, since nothing here changes status).
+    skipTask(id) {
+        const t = this.findTask(id);
+        if (!t) return;
+
+        const todayStr = this.getLocalDateStr(new Date());
+        t.lastAckDate = todayStr;
+        t.deadlineAckDate = todayStr;
+        if (!Array.isArray(t.skippedDates)) t.skippedDates = [];
+        if (t.skippedDates.indexOf(todayStr) === -1) t.skippedDates.push(todayStr);
+        t.updatedAt = Date.now();
+
+        this.saveData();
+        this.renderTable();
+        this.showToast("Skipped for today — still open, and won't be in today's report.", "info");
     },
 
     undoComplete(id, spawnedId) {
@@ -3040,6 +4473,7 @@ const app = {
         this.saveData();
         this.renderTable();
         this.processEngine();
+        this.logTaskActivity(t, 'reopened', '');
         this.showToast('Entry reopened.', 'success');
         this.syncToGoogleSheets();
     },
@@ -3057,6 +4491,7 @@ const app = {
 
         this.saveData();
         this.renderTable();
+        this.logTaskActivity(t, 'binned', '');
         this.showToast('Moved to Bin.', 'success', { label: 'Undo', onClick: () => this.restoreTask(id) });
         this.syncToGoogleSheets();
     },
@@ -3072,6 +4507,7 @@ const app = {
         this.saveData();
         this.renderTable();
         this.processEngine();
+        this.logTaskActivity(t, 'restored', '');
         this.showToast('Entry restored.', 'success');
         this.syncToGoogleSheets();
     },
@@ -3087,6 +4523,7 @@ const app = {
 
         this.saveData();
         this.renderTable();
+        this.logTaskActivity(t, 'deleted permanently', '');
         this.showToast('Entry deleted permanently.', 'success');
         this.syncToGoogleSheets();
     },
@@ -3230,7 +4667,7 @@ const app = {
         const monthName = new Date().toLocaleDateString('en-IN', { month: 'long' });
         const noDue = open.filter(t => !t.dueDate);
         const pendingNow = open.filter(t => (t.status || 'Pending') === 'Pending');
-        const pendingToday = open.filter(t => (t.status || 'Pending') === 'Pending' && this.isDateInRange(t, 'DueByToday'));
+        const pendingToday = open.filter(t => this.isDateInRange(t, 'DueByToday'));
 
         const todayStr = this.getLocalDateStr(new Date());
         const in7 = new Date(); in7.setDate(in7.getDate() + 7);
@@ -3267,12 +4704,15 @@ const app = {
             this.dashTile({
                 title: 'Due Today', count: dueToday.length, colour: 'var(--blue)',
                 ftype: 'due', fvalue: 'Today',
-                sub: dueToday.length ? 'On the clock' : 'Nothing due'
+                sub: dueToday.length ? 'On the clock' : 'Nothing to do Today'
             }),
             this.dashTile({
                 title: 'Overdue', count: overdue.length, colour: 'var(--red)',
                 ftype: 'due', fvalue: 'Overdue',
-                sub: overdue.length ? 'Needs attention' : 'All clear'
+                // No overdue entries: say so plainly. This is a display-only
+                // state — it's never written to a task and never logged as
+                // activity, so it can't show up in the Daily Activity Report.
+                sub: overdue.length ? 'Needs attention' : 'Nothing to do Today'
             }),
             this.dashTile({
                 title: 'Next 7 Days', count: next7.length, colour: 'var(--amber)',
@@ -3308,6 +4748,11 @@ const app = {
                 title: 'By Category', ftype: 'category', total: total,
                 rows: this.dashGroup(open, 'category', 'Uncategorised'),
                 empty: 'Nothing open to break down.'
+            }),
+            this.dashSection({
+                title: 'By Sub Category', ftype: 'subCategory', total: open.filter(t => t.subCategory).length,
+                rows: this.dashGroup(open.filter(t => t.subCategory), 'subCategory', 'No sub category'),
+                empty: 'No sub categories in use yet.'
             }),
             this.dashSection({
                 title: 'By Status', ftype: 'status', total: total,
@@ -3355,7 +4800,6 @@ const app = {
             document.getElementById('filterDue').value = fvalue;
         } else if (ftype === 'pendingToday') {
             document.getElementById('filterDue').value = 'DueByToday';
-            this.setMultiValue('filterStatusOpts', 'Pending');
         } else if (ftype === 'category') {
             this.setMultiValue('filterCategoryOpts', fvalue);
         } else if (ftype === 'status') {
@@ -3371,6 +4815,13 @@ const app = {
             const search = document.getElementById('searchHolidays');
             if (search) { search.value = fvalue; this.renderHolidays(); }
             this.showToast('Holiday: ' + fvalue, 'info');
+            return;
+        } else if (ftype === 'subCategory') {
+            this.clearFilters(true);
+            const searchEl = document.getElementById('searchInput');
+            if (searchEl) searchEl.value = fvalue;
+            this.switchTab('Register');
+            this.showToast('Sub Category: ' + fvalue, 'info');
             return;
         }
 
@@ -3491,7 +4942,7 @@ const app = {
             el.classList.remove('swipe-done', 'swipe-bin');
             if (!wasX) return;
 
-            if (moved > 95) this.markComplete(el.dataset.recordId);
+            if (moved > 95) this.tryCompleteTask(el.dataset.recordId);
             else if (moved < -95) this.softDelete(el.dataset.recordId);
         };
         document.addEventListener('touchend', release, { passive: true });
@@ -3744,18 +5195,24 @@ const app = {
         const pending = this.lists.statuses.indexOf('Pending') !== -1 ? 'Pending' : (this.lists.statuses[0] || 'Pending');
         const spawned = [];
         let n = 0;
+        let needsSubCategory = 0;
 
         ids.forEach(id => {
             const t = this.findTask(id);
             if (!t) return;
 
             if (kind === 'done') {
+                // Can't fill in a Sub Category's required fields from a bulk
+                // action — leave those entries open and point the user at
+                // them individually instead of completing them half-filled.
+                if (!this.subCategoryComplete(t)) { needsSubCategory++; return; }
                 t.status = 'Completed';
                 t.completedDate = todayStr;
                 t.lastAckDate = null; t.snoozeUntil = null;
                 t.updatedAt = Date.now();
                 const repeat = this.nextOccurrence(t);
                 if (repeat) { if (!t.seriesId) t.seriesId = repeat.seriesId; spawned.push(repeat); }
+                this.logTaskActivity(t, 'completed', this.reportDetailsFor(t));
             } else if (kind === 'reopen') {
                 t.status = pending;
                 t.completedDate = null; t.lastAckDate = null; t.snoozeUntil = null;
@@ -3782,7 +5239,11 @@ const app = {
         this.processEngine();
 
         const verb = { done: 'completed', reopen: 'reopened', bin: 'moved to the Bin', restore: 'restored' }[kind];
-        this.showToast(n + ' ' + (n === 1 ? 'entry' : 'entries') + ' ' + verb + '.', 'success');
+        let msg = n + ' ' + (n === 1 ? 'entry' : 'entries') + ' ' + verb + '.';
+        if (needsSubCategory > 0) {
+            msg += ' ' + needsSubCategory + ' skipped — open ' + (needsSubCategory === 1 ? 'it' : 'them') + ' individually to fill in the Sub Category first.';
+        }
+        this.showToast(msg, needsSubCategory > 0 ? 'warning' : 'success');
         this.syncToGoogleSheets();
     },
 

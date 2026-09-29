@@ -398,11 +398,19 @@
         .toolbar-filters { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; }
         .toolbar-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
 
-        /* ── COMPACT TOOLBAR (search + gear, no dedicated filter row) ── */
+        /* ── COMPACT TOOLBAR (search + gear, no dedicated filter row) ──
+           Search bar, the filter (gear) icon and every other icon button
+           always sit on one line: the search box is the only part allowed
+           to shrink (it has min-width:0 to give up space), every button
+           keeps its full size (flex-shrink:0) instead of getting squeezed
+           out of view. Note: this row can't scroll horizontally — the
+           filter panel it opens is positioned absolutely relative to it,
+           and would get clipped by an overflow:auto ancestor. ── */
         .compact-toolbar {
             display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
             padding: 12px var(--gutter, 16px); position: relative;
         }
+        .compact-toolbar > .btn-icon, .compact-toolbar > .btn-new-entry { flex: 0 0 auto; }
         .toolbar-search-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
         .toolbar-search-wrap .search-compact { width: 100%; flex: 1 1 auto; min-width: 0; padding-right: 34px; }
         .search-cancel-btn {
@@ -435,6 +443,12 @@
             color: var(--label); cursor: pointer; flex: 1 1 auto; justify-content: center; white-space: nowrap;
         }
         .fp-action-btn.danger { color: var(--red-ink); }
+        #taskKeyPoints { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        .keypoint-row { display: flex; gap: 8px; align-items: center; }
+        .keypoint-row .kp-key { flex: 0 0 38%; }
+        .keypoint-row .kp-value { flex: 1 1 auto; min-width: 0; }
+        .keypoint-row input { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--input-bg); color: var(--label); font-size: 0.86rem; }
+        .keypoint-row .kp-remove { flex: 0 0 auto; }
         /* search-expanded: hide everything except the search bar itself */
         .compact-toolbar.search-expanded > *:not(.toolbar-search-wrap) { display: none !important; }
         .compact-toolbar.search-expanded .toolbar-search-wrap { flex: 1 1 100%; }
@@ -657,6 +671,7 @@
         .btn-icon.bad:hover  { color: var(--red-ink);   border-color: rgba(255,59,48,0.3);   background: rgba(255,59,48,0.08); }
 
         .rec-badge { display: inline-block; margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; font-weight: 700; color: var(--violet-ink); background: rgba(175,82,222,0.10); border-radius: 10px; }
+        .skip-badge { display: inline-block; margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; font-weight: 700; color: var(--label-2); background: var(--fill); border-radius: 10px; }
         .mailchain { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.82rem; color: var(--blue-ink); font-weight: 500; }
         .btn-copy {
             flex: 0 0 auto; display: inline-grid; place-items: center;
@@ -776,6 +791,14 @@
         }
         .form-group textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .form-row-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+        @media (min-width: 901px) and (max-width: 1100px) {
+            .form-row-4 { grid-template-columns: repeat(2, 1fr); }
+        }
+        /* A wider entry screen for forms with a lot of side-by-side fields
+           (the Task modal) — makes real use of a desktop-sized window
+           instead of stranding a narrow card in the middle of it. */
+        .modal-wide { max-width: 1040px; }
 
         .modal-buttons { display: flex; gap: 12px; margin-top: 32px; }
         .btn-modal {
@@ -824,12 +847,60 @@
         .sheet-stat b { display: block; font-size: 1.5rem; font-weight: 800; color: var(--accent); letter-spacing: -0.03em; }
         .sheet-stat span { font-size: 0.72rem; color: var(--label-2); text-transform: uppercase; font-weight: 700; letter-spacing: 0.04em; }
 
-        .cfg-section {
-            margin-bottom: 16px; padding: 18px; border-radius: 20px;
-            background: var(--glass-bg); border: 1px solid var(--glass-border);
-            box-shadow: var(--glass-shadow-sm), var(--glass-inset);
+        .cfg-list {
+            border-radius: 20px; background: var(--glass-bg); border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-shadow-sm), var(--glass-inset); overflow: hidden;
         }
+        .cfg-section {
+            padding: 18px; border-bottom: 1px solid var(--separator);
+        }
+        .cfg-section:last-child { border-bottom: none; }
         .dash-title { margin-bottom: 12px; font-size: 1rem; font-weight: 800; color: var(--label); }
+
+        /* ── WordPress-admin-style shell: a nav list on one side, one
+           settings panel visible at a time on the other. Desktop shows
+           both side by side; mobile drills down (tap a row → back button
+           returns to the list), since a permanent sidebar doesn't fit a
+           narrow screen. ── */
+        .cfg-shell { display: flex; gap: 20px; align-items: flex-start; }
+        .cfg-nav {
+            flex: 0 0 240px; display: flex; flex-direction: column; gap: 2px;
+            border-radius: 20px; background: var(--glass-bg); border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-shadow-sm), var(--glass-inset); overflow: hidden; padding: 6px;
+        }
+        .cfg-nav-item {
+            display: flex; align-items: center; gap: 10px; padding: 12px 12px; border-radius: 12px;
+            background: transparent; border: none; text-align: left; cursor: pointer;
+            font-size: 0.88rem; font-weight: 600; color: var(--label);
+        }
+        .cfg-nav-item:hover { background: var(--fill); }
+        .cfg-nav-item.active { background: var(--accent); color: #fff; }
+        .cfg-nav-ico { flex: 0 0 auto; font-size: 1rem; }
+        .cfg-nav-label { flex: 1 1 auto; min-width: 0; }
+        .cfg-nav-chevron { flex: 0 0 auto; opacity: 0.5; font-size: 0.9rem; }
+        .cfg-nav-item.active .cfg-nav-chevron { opacity: 0.85; }
+
+        .cfg-panels {
+            flex: 1 1 auto; min-width: 0; border-radius: 20px; background: var(--glass-bg);
+            border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow-sm), var(--glass-inset);
+            overflow: hidden;
+        }
+        .cfg-panel { display: none; padding: 20px; border-bottom: none; }
+        .cfg-panel.active { display: block; }
+        .cfg-back-btn {
+            display: none; width: 100%; text-align: left; padding: 14px 18px; border: none;
+            border-bottom: 1px solid var(--separator); background: var(--fill); color: var(--accent);
+            font-size: 0.9rem; font-weight: 700; cursor: pointer;
+        }
+
+        /* Mobile: one column at a time — list first, tap to drill into a
+           panel, back button returns to the list. */
+        html[data-shell="mobile"] .cfg-shell { flex-direction: column; }
+        html[data-shell="mobile"] .cfg-nav { flex: 1 1 auto; width: 100%; }
+        html[data-shell="mobile"] .cfg-panels { width: 100%; }
+        html[data-shell="mobile"] .cfg-shell:not(.showing-panel) .cfg-panels { display: none; }
+        html[data-shell="mobile"] .cfg-shell.showing-panel .cfg-nav { display: none; }
+        html[data-shell="mobile"] .cfg-shell.showing-panel .cfg-back-btn { display: block; }
         .sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
         .sheet-item {
             display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
@@ -1100,6 +1171,7 @@
         html[data-shell="mobile"] .modal-content { max-width: 100%; max-height: 85dvh; border-radius: 32px 32px 0 0; padding: 24px 24px calc(32px + env(safe-area-inset-bottom, 0px)); animation: sheetSlideUp 0.3s var(--ease-spring) both; }
         html[data-shell="mobile"] .modal-header::before { content: ''; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 40px; height: 5px; border-radius: 4px; background: var(--line-strong); }
         html[data-shell="mobile"] .form-row { grid-template-columns: 1fr; gap: 12px; }
+        html[data-shell="mobile"] .form-row-4 { grid-template-columns: 1fr; gap: 12px; }
         html[data-shell="mobile"] .modal-buttons { flex-direction: column; }
         html[data-shell="mobile"] .btn-modal { width: 100%; }
         html[data-shell="mobile"] #toastContainer { top: calc(var(--appbar-h) + 10px); bottom: auto; width: calc(100vw - 24px); align-items: stretch; }
@@ -1249,6 +1321,7 @@
     </script>
 
     <!-- Header -->
+
     <header class="appbar" id="mainAppHeader" style="display:none;">
         <div class="appbar-left">
             <span class="appbar-mark" id="appMark">
@@ -1313,7 +1386,13 @@
                 <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('register')" title="Close search">✕</button>
             </div>
 
-            <button type="button" class="btn-icon gear-btn" id="registerGearBtn" onclick="app.toggleFilterPanel('register')" title="Filters &amp; more">⚙️<span class="gear-dot" id="registerFilterDot"></span></button>
+            <button type="button" class="btn-icon gear-btn" id="registerGearBtn" onclick="app.toggleFilterPanel('register')" title="Filter by category, priority, status, pending with, due date">⚙️<span class="gear-dot" id="registerFilterDot"></span></button>
+            <button type="button" class="btn-icon" onclick="app.toggleSelectMode()" title="Select several entries">☑</button>
+            <button type="button" class="btn-icon" id="sortToggleRegister" onclick="app.openSortMenu('Register', this)" title="Sort">🔃</button>
+            <button type="button" class="btn-icon" onclick="app.fitColumns('register')" title="Fit Columns">⤢</button>
+            <button type="button" class="btn-icon" onclick="app.printRegister()" title="Print">🖨️</button>
+            <button type="button" class="btn-icon" onclick="app.openEmailModal()" title="Mail">📧</button>
+            <button type="button" class="btn-icon bad" onclick="app.clearFilters()" title="Clear All Filters">🚫</button>
             <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
             <button class="btn-new-entry" onclick="app.openTaskModal()" title="New Entry">＋</button>
 
@@ -1349,15 +1428,6 @@
                         <option value="NoDue">No due date</option>
                     </select>
                 </div>
-                <div class="filter-panel-divider"></div>
-                <div class="filter-panel-actions">
-                    <button type="button" class="fp-action-btn" onclick="app.toggleSelectMode()">☑ Select</button>
-                    <button type="button" class="fp-action-btn" id="sortToggleRegister" onclick="app.openSortMenu('Register', this)">🔃 Sort</button>
-                    <button type="button" class="fp-action-btn" onclick="app.fitColumns('register')">⤢ Fit Columns</button>
-                    <button type="button" class="fp-action-btn" onclick="app.printRegister()">🖨️ Print</button>
-                    <button type="button" class="fp-action-btn" onclick="app.openEmailModal()">📧 Mail</button>
-                </div>
-                <button type="button" class="fp-action-btn danger" onclick="app.clearFilters()">🚫 Clear All Filters</button>
             </div>
         </div>
 
@@ -1398,7 +1468,8 @@
                 <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('holidays')" title="Close search">✕</button>
             </div>
 
-            <button type="button" class="btn-icon gear-btn" id="holidaysGearBtn" onclick="app.toggleFilterPanel('holidays')" title="Filters &amp; more">⚙️<span class="gear-dot" id="holidaysFilterDot"></span></button>
+            <button type="button" class="btn-icon gear-btn" id="holidaysGearBtn" onclick="app.toggleFilterPanel('holidays')" title="Filter by calendar, alerts-on only">⚙️<span class="gear-dot" id="holidaysFilterDot"></span></button>
+            <button type="button" class="btn-icon bad" onclick="app.clearHolidayFilters()" title="Clear All Filters">🚫</button>
             <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
             <button class="btn-new-entry" onclick="app.openHolidayModal()" title="Add Holiday">＋</button>
 
@@ -1416,8 +1487,6 @@
                         <input type="checkbox" id="filterHolidayAlertOnly" style="width:16px; height:16px; accent-color:var(--accent);" onchange="app.renderHolidays(); app.markFilterDot('holidays');"> Alerts-on only
                     </label>
                 </div>
-                <div class="filter-panel-divider"></div>
-                <button type="button" class="fp-action-btn danger" onclick="app.clearHolidayFilters()">🚫 Clear All Filters</button>
             </div>
         </div>
 
@@ -1453,7 +1522,11 @@
                 <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('completed')" title="Close search">✕</button>
             </div>
 
-            <button type="button" class="btn-icon gear-btn" id="completedGearBtn" onclick="app.toggleFilterPanel('completed')" title="Filters &amp; more">⚙️<span class="gear-dot" id="completedFilterDot"></span></button>
+            <button type="button" class="btn-icon gear-btn" id="completedGearBtn" onclick="app.toggleFilterPanel('completed')" title="Filter by category">⚙️<span class="gear-dot" id="completedFilterDot"></span></button>
+            <button type="button" class="btn-icon" onclick="app.toggleSelectMode()" title="Select several entries">☑</button>
+            <button type="button" class="btn-icon" id="sortToggleCompleted" onclick="app.openSortMenu('Completed', this)" title="Sort">🔃</button>
+            <button type="button" class="btn-icon" onclick="app.fitColumns('completed')" title="Fit Columns">⤢</button>
+            <button type="button" class="btn-icon bad" onclick="app.clearFilters()" title="Clear All Filters">🚫</button>
             <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
 
             <div class="filter-panel" id="completedFilterPanel">
@@ -1464,13 +1537,6 @@
                         <div class="ms-options" id="filterCategoryCompletedOpts"></div>
                     </div>
                 </div>
-                <div class="filter-panel-divider"></div>
-                <div class="filter-panel-actions">
-                    <button type="button" class="fp-action-btn" onclick="app.toggleSelectMode()">☑ Select</button>
-                    <button type="button" class="fp-action-btn" id="sortToggleCompleted" onclick="app.openSortMenu('Completed', this)">🔃 Sort</button>
-                    <button type="button" class="fp-action-btn" onclick="app.fitColumns('completed')">⤢ Fit Columns</button>
-                </div>
-                <button type="button" class="fp-action-btn danger" onclick="app.clearFilters()">🚫 Clear All Filters</button>
             </div>
         </div>
 
@@ -1533,7 +1599,27 @@
             <div class="sheet-stat"><b id="badgeBin">0</b><span>In Bin</span></div>
         </div>
 
-        <div class="cfg-section">
+        <div class="cfg-shell" id="cfgShell">
+            <nav class="cfg-nav" id="cfgNav">
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgAppearance" onclick="app.showCfgPanel('cfgAppearance')"><span class="cfg-nav-ico">🎨</span><span class="cfg-nav-label">Appearance (iOS Glass Themes)</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgActivityLog" onclick="app.showCfgPanel('cfgActivityLog')"><span class="cfg-nav-ico">📝</span><span class="cfg-nav-label">Activity Log</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgFixedTasks" onclick="app.showCfgPanel('cfgFixedTasks')"><span class="cfg-nav-ico">📌</span><span class="cfg-nav-label">Fixed Daily Activities</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgLeaveDays" onclick="app.showCfgPanel('cfgLeaveDays')"><span class="cfg-nav-ico">🌴</span><span class="cfg-nav-label">Leave Days</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgReportSamples" onclick="app.showCfgPanel('cfgReportSamples')"><span class="cfg-nav-ico">🧾</span><span class="cfg-nav-label">Report Style Samples</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgDailyReport" onclick="app.showCfgPanel('cfgDailyReport')"><span class="cfg-nav-ico">📊</span><span class="cfg-nav-label">Daily Activity Report</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgTextSize" onclick="app.showCfgPanel('cfgTextSize')"><span class="cfg-nav-ico">🔤</span><span class="cfg-nav-label">Text Size</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgCloudSync" onclick="app.showCfgPanel('cfgCloudSync')"><span class="cfg-nav-ico">☁️</span><span class="cfg-nav-label">Cloud Sync</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgDataBackup" onclick="app.showCfgPanel('cfgDataBackup')"><span class="cfg-nav-ico">💾</span><span class="cfg-nav-label">Data Backup</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgAlarmSound" onclick="app.showCfgPanel('cfgAlarmSound')"><span class="cfg-nav-ico">🔔</span><span class="cfg-nav-label">Alarm Sound</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgWalkReminder" onclick="app.showCfgPanel('cfgWalkReminder')"><span class="cfg-nav-ico">🚶</span><span class="cfg-nav-label">Walk Reminder</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgWaterReminder" onclick="app.showCfgPanel('cfgWaterReminder')"><span class="cfg-nav-ico">💧</span><span class="cfg-nav-label">Water Reminder</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgTimeSlots" onclick="app.showCfgPanel('cfgTimeSlots')"><span class="cfg-nav-ico">⏱️</span><span class="cfg-nav-label">Time Slots</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgToolsSettings" onclick="app.showCfgPanel('cfgToolsSettings')"><span class="cfg-nav-ico">⚙️</span><span class="cfg-nav-label">Settings & Tools</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgSystem" onclick="app.showCfgPanel('cfgSystem')"><span class="cfg-nav-ico">📱</span><span class="cfg-nav-label">System</span><span class="cfg-nav-chevron">›</span></button>
+            </nav>
+            <div class="cfg-panels" id="cfgPanels">
+                <button type="button" class="cfg-back-btn" id="cfgBackBtn" onclick="app.showCfgNav()">‹ Settings</button>
+<div class="cfg-section cfg-panel" id="cfgAppearance" data-cfg-panel="cfgAppearance">
             <div class="dash-title">Appearance (iOS Glass Themes)</div>
             <div class="theme-row">
                 <button class="theme-btn" data-theme="pearl" onclick="app.applyTheme('pearl')">⚪ Pearl</button>
@@ -1543,8 +1629,54 @@
                 <button class="theme-btn" data-theme="hero3d" onclick="app.applyTheme('hero3d')">🔮 3D Hero</button>
             </div>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgActivityLog" data-cfg-panel="cfgActivityLog">
+            <div class="dash-title">Activity Log</div>
+            <p class="cfg-hint">Your Task Activity Log fills itself in automatically — every task you create, edit, complete, reopen, bin, or restore is logged with its category, status, notes and Key Points, with no typing needed here. This box below is only for something worth reporting that never became a task at all (a call, a meeting, anything off-tracker).</p>
+            <div class="sheet-grid" style="gap:10px;">
+                <input autocomplete="off" type="text" id="generalLogActivity" placeholder="Something NOT already a task (e.g. Team standup call)" style="grid-column: 1 / -1;">
+                <input autocomplete="off" type="text" id="generalLogDetails" placeholder="Details (optional)" style="grid-column: 1 / -1;">
+                <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.submitGeneralLog()">Log this activity</button>
+            </div>
+        </div>
+<div class="cfg-section cfg-panel" id="cfgFixedTasks" data-cfg-panel="cfgFixedTasks">
+            <div class="dash-title">Fixed Daily Activities</div>
+            <p class="cfg-hint">Standing tasks you do every working day (e.g. "Daily NOSTRO account reconciliation"). Describe once — every daily report includes it automatically from then on, with no need to log it again. Uncheck to pause one without losing it.</p>
+            <div class="sheet-grid" style="gap:10px;">
+                <input autocomplete="off" type="text" id="fixedTaskText" placeholder="e.g. Daily NOSTRO account reconciliation" style="grid-column: 1 / -1;">
+                <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.saveFixedTask()">Add fixed activity</button>
+            </div>
+            <div id="fixedTasksList" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+<div class="cfg-section cfg-panel" id="cfgLeaveDays" data-cfg-panel="cfgLeaveDays">
+            <div class="dash-title">Leave Days</div>
+            <p class="cfg-hint">Mark a day where there's genuinely nothing to do on the tracker. Leave days count as non-working for the "due on a holiday/Sunday" alert choice, and marking one is never logged as activity, so it won't show up in the daily report.</p>
+            <button class="btn-modal primary" id="leaveTodayBtn" onclick="app.toggleTodayLeave()" style="margin-bottom:14px;">Mark Today as Leave</button>
+            <div id="leaveDaysList" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+<div class="cfg-section cfg-panel" id="cfgReportSamples" data-cfg-panel="cfgReportSamples">
+            <div class="dash-title">Report Style Samples</div>
+            <p class="cfg-hint">Paste in a report you've already written by hand. The AI will match its style, structure, and level of detail on every future report — the more you add, the closer the match. Only your 3 most recent saved samples are used per report.</p>
+            <div class="sheet-grid" style="gap:10px;">
+                <textarea id="reportSampleText" placeholder="Paste a past daily report here..." style="grid-column: 1 / -1; min-height:100px;"></textarea>
+                <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.saveReportSample()">Save as style sample</button>
+            </div>
+            <div id="reportSamplesList" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+<div class="cfg-section cfg-panel" id="cfgDailyReport" data-cfg-panel="cfgDailyReport">
+            <div class="dash-title">Daily Activity Report</div>
+            <p class="cfg-hint">Summarizes today's Task Activity Log (with full task detail) + General Activity Log + any saved style samples above, into a report written by Gemini.</p>
+            <div class="sheet-grid" style="gap:10px;">
+                <input autocomplete="off" type="date" id="dailyReportDate" style="grid-column: 1 / -1;">
+                <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.resyncCompletedForReport()" title="Re-sends every Completed entry for this date to the report log — safe to run any time, in case any completion didn't get logged">Resync completed tasks for this date</button>
+                <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.generateDailyReport()">Generate report</button>
+            </div>
+            <div id="dailyReportOutput" style="display:none; margin-top:12px; padding:14px; border-radius:14px; background:var(--input-bg); border:1px solid var(--line); white-space:pre-wrap; font-size:0.86rem; line-height:1.6; color:var(--label);"></div>
+            <div class="sheet-grid" id="dailyReportActions" style="display:none; margin-top:10px; gap:10px;">
+                <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.copyDailyReport()">Copy report text</button>
+                <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.exportDailyReportExcel()">Download as Excel</button>
+            </div>
+        </div>
+<div class="cfg-section cfg-panel" id="cfgTextSize" data-cfg-panel="cfgTextSize">
             <div class="dash-title">Text Size</div>
             <p class="cfg-hint">Default text size for the whole app. Tap to switch — takes effect immediately.</p>
             <div class="theme-row">
@@ -1554,8 +1686,7 @@
                 <button class="theme-btn textsize-btn" data-size="xlarge" onclick="app.applyTextSize('xlarge')">A X-Large</button>
             </div>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgCloudSync" data-cfg-panel="cfgCloudSync">
             <div class="dash-title">Cloud Sync</div>
             <div class="sheet-grid">
                 <button class="sheet-item" onclick="app.syncCycle(true)"><span class="ico">↻</span>Sync now</button>
@@ -1564,8 +1695,7 @@
                 <button class="sheet-item" onclick="app.openSyncSetup()"><span class="ico">🔗</span>Connection</button>
             </div>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgDataBackup" data-cfg-panel="cfgDataBackup">
             <div class="dash-title">Data Backup</div>
             <div class="sheet-grid">
                 <button class="sheet-item" onclick="app.exportData('csv')"><span class="ico">💾</span>Export CSV</button>
@@ -1573,14 +1703,12 @@
                 <button class="sheet-item" onclick="app.findDuplicates()"><span class="ico">⧉</span>Duplicates</button>
             </div>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgAlarmSound" data-cfg-panel="cfgAlarmSound">
             <div class="dash-title">Alarm Sound</div>
             <p class="cfg-hint">Plays when a task goes past its deadline. Tap a name to use it, or ▶ to preview.</p>
             <div class="sound-list" id="alarmSoundList"></div>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgWalkReminder" data-cfg-panel="cfgWalkReminder">
             <div class="dash-title">Walk Reminder</div>
             <p class="cfg-hint">Nudges you to leave the desk while you work. It alerts at each slot in the window below, with the same sound as a task alert.</p>
             <div class="walk-row">
@@ -1592,8 +1720,7 @@
             </div>
             <p class="cfg-hint" id="walkNextHint" style="margin: 12px 0 0;"></p>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgWaterReminder" data-cfg-panel="cfgWaterReminder">
             <div class="dash-title">Water Reminder</div>
             <p class="cfg-hint">Nudges you to drink water through the day. Same alert style as the walk reminder, on its own schedule.</p>
             <div class="walk-row">
@@ -1605,8 +1732,7 @@
             </div>
             <p class="cfg-hint" id="waterNextHint" style="margin: 12px 0 0;"></p>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgTimeSlots" data-cfg-panel="cfgTimeSlots">
             <div class="dash-title">Time Slots</div>
             <p class="cfg-hint">Keeps two tasks off the same time. A scheduled task holds the clock for the minutes below, and anything booked inside that window is turned away with the next free time.</p>
             <div class="walk-row">
@@ -1615,8 +1741,7 @@
             </div>
             <p class="cfg-hint" id="slotHint" style="margin: 12px 0 0;"></p>
         </div>
-
-        <div class="cfg-section">
+<div class="cfg-section cfg-panel" id="cfgToolsSettings" data-cfg-panel="cfgToolsSettings">
             <div class="dash-title">Settings & Tools</div>
             <div class="sheet-grid">
                 <button class="sheet-item" onclick="app.openListManager('categories')"><span class="ico">⚙️</span>Lists</button>
@@ -1624,8 +1749,7 @@
                 <button class="sheet-item" onclick="app.testAlarmSound()"><span class="ico">🔔</span>Test Alarm</button>
             </div>
         </div>
-
-        <div class="cfg-section" id="appSection">
+<div class="cfg-section cfg-panel" id="cfgSystem" data-cfg-panel="cfgSystem">
             <div class="dash-title">System</div>
             <div class="sheet-grid">
                 <button class="sheet-item" id="installBtn" style="display:none;" onclick="pwa.install()"><span class="ico">⬇️</span>Install App</button>
@@ -1636,11 +1760,13 @@
             <p class="cfg-hint" id="swVersion" style="margin: 14px 0 0;"></p>
             <p class="cfg-hint" id="installHint" style="margin: 6px 0 0;"></p>
         </div>
+            </div>
+        </div>
     </div>
 
     <!-- TASK MODAL -->
     <div class="modal" id="taskModal">
-        <div class="modal-content">
+        <div class="modal-content modal-wide">
             <div class="modal-header">
                 <h2 id="modalTitle">New Entry</h2>
                 <button class="modal-close" onclick="app.closeTaskModal()">✕</button>
@@ -1650,39 +1776,79 @@
                     <label>Task Description</label>
                     <input autocomplete="off" type="text" id="taskDescription" required placeholder="e.g. Follow up on LC opening">
                 </div>
-                <div class="form-row">
+                <div class="form-row-4">
                     <div class="form-group">
                         <label>Category <a href="#" class="edit-options-btn" onclick="app.openListManager('categories'); return false;">Edit</a></label>
-                        <select id="taskCategory"><option value="">Select category</option></select>
+                        <select id="taskCategory" onchange="app.updateConditionalFields()"><option value="">Select category</option></select>
                     </div>
                     <div class="form-group">
                         <label>Priority <a href="#" class="edit-options-btn" onclick="app.openListManager('priorities'); return false;">Edit</a></label>
                         <select id="taskPriority"></select>
                     </div>
-                </div>
-                <div class="form-row">
                     <div class="form-group">
                         <label>Status <a href="#" class="edit-options-btn" onclick="app.openListManager('statuses'); return false;">Edit</a></label>
-                        <select id="taskStatus"></select>
+                        <select id="taskStatus" onchange="app.updateConditionalFields()"></select>
                     </div>
                     <div class="form-group">
                         <label>Pending With <a href="#" class="edit-options-btn" onclick="app.openListManager('pendingWith'); return false;">Edit</a></label>
                         <select id="taskPendingWith"><option value="">Select person</option></select>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label style="color:var(--accent);">Due Date & Time</label>
-                    <div style="display:flex; gap:12px;">
-                        <input autocomplete="off" type="date" id="taskDueDate" onchange="app.checkDueHoliday(); app.checkSlotAvailability()">
-                        <input autocomplete="off" type="time" id="taskDueTime" onchange="app.checkSlotAvailability()">
+                <div class="form-group" id="subCategoryField" style="display:none;">
+                    <label>Sub Category <a href="#" class="edit-options-btn" onclick="app.openSubCategoryRules(); return false;">Manage rules</a></label>
+                    <select id="taskSubCategory" onchange="app.renderSubCategoryFields()"><option value="">Select Sub Category</option></select>
+                    <div id="subCategoryRuleFields" style="margin-top:10px; display:flex; flex-direction:column; gap:10px;"></div>
+                </div>
+                <div id="importInProgressFields" style="display:none;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Payment %</label>
+                            <input autocomplete="off" type="number" id="pdPaymentPercent" min="0" max="100" placeholder="e.g. 30">
+                        </div>
+                        <div class="form-group">
+                            <label>Payment Type</label>
+                            <select id="pdPaymentType">
+                                <option value="">Select</option>
+                                <option value="Advance">Advance</option>
+                                <option value="Balance">Balance</option>
+                                <option value="Remaining Balance">Remaining Balance</option>
+                            </select>
+                        </div>
                     </div>
-                    <div class="due-hint" id="dueHolidayHint"></div>
-                    <div class="due-hint" id="dueSlotHint"></div>
+                    <div class="form-group">
+                        <label>Payment Against</label>
+                        <select id="pdPaymentAgainst">
+                            <option value="">Select</option>
+                            <option value="Before Dispatch">Before Dispatch</option>
+                            <option value="Before Production">Before Production</option>
+                            <option value="Against BOE">Against BOE</option>
+                            <option value="Against BL">Against BL</option>
+                            <option value="Against CI">Against CI</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label style="color:var(--accent);">Due Date & Time</label>
+                        <div style="display:flex; gap:12px;">
+                            <input autocomplete="off" type="date" id="taskDueDate" onchange="app.checkDueHoliday(); app.checkSlotAvailability()">
+                            <input autocomplete="off" type="time" id="taskDueTime" onchange="app.checkSlotAvailability()">
+                        </div>
+                        <div class="due-hint" id="dueHolidayHint"></div>
+                        <div class="due-hint" id="dueSlotHint"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Deadline <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--label-2);">(optional — alerted once crossed)</span></label>
+                        <div style="display:flex; gap:12px;">
+                            <input autocomplete="off" type="date" id="taskDeadlineDate">
+                            <input autocomplete="off" type="time" id="taskDeadlineTime">
+                        </div>
+                    </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>Mail Chain / Reference</label>
-                        <input autocomplete="off" type="text" id="taskMailChain" placeholder="e.g. Ticket #12345">
+                        <input autocomplete="off" type="text" id="taskMailChain" placeholder="e.g. Ticket #12345" oninput="app.updateNarrationPreview()">
                     </div>
                     <div class="form-group">
                         <label>Recurrence</label>
@@ -1694,9 +1860,40 @@
                         </select>
                     </div>
                 </div>
+                <div class="form-group" id="tallyNarrationBox" style="display:none;">
+                    <label>Tally Narration <a href="#" class="edit-options-btn" onclick="app.openNarrationRules(); return false;">Manage types</a></label>
+                    <select id="taskNarrationType" onchange="app.onNarrationTypeChange()"><option value="">— Not a payment / skip —</option></select>
+                    <div id="narrationFieldsWrap" style="display:none; margin-top:10px;">
+                        <div class="form-group" id="narrationPercentGroup" style="display:none;">
+                            <label>%</label>
+                            <input autocomplete="off" type="number" min="0" max="100" id="narrationPercent" placeholder="e.g. 100" oninput="app.updateNarrationPreview()">
+                        </div>
+                        <div class="form-group">
+                            <label id="narrationDocLabel">Document No</label>
+                            <input autocomplete="off" type="text" id="narrationDocNo" placeholder="e.g. INPO/PP/26-27/0156" oninput="app.updateNarrationPreview()">
+                        </div>
+                        <div id="narrationExtraFieldsWrap"></div>
+                        <div class="form-group">
+                            <label>Purpose / Note <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+                            <input autocomplete="off" type="text" id="narrationPurpose" placeholder="e.g. After TDS of 10%" oninput="app.updateNarrationPreview()">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0;">
+                            <label>Generated Narration</label>
+                            <textarea id="narrationPreview" readonly style="min-height:70px;"></textarea>
+                            <button type="button" class="btn-modal secondary" style="margin-top:8px;" onclick="app.copyToClipboard(document.getElementById('narrationPreview').value)">Copy Narration</button>
+                        </div>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label>Notes</label>
                     <textarea autocomplete="off" id="taskNotes" placeholder="Additional notes or context..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex; align-items:center; justify-content:space-between;">
+                        <span>Key Points <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--label-2);">(feeds the daily AI report)</span></span>
+                        <button type="button" class="fp-action-btn" style="flex:0 0 auto; padding:4px 10px;" onclick="app.addKeyPointRow()">+ Add</button>
+                    </label>
+                    <div id="taskKeyPoints"></div>
                 </div>
                 <div class="modal-buttons">
                     <button type="button" class="btn-modal secondary" id="viewOriginalEmailBtn" style="display:none;" onclick="app.openStoredEmail()">Open Mail</button>
@@ -1705,6 +1902,83 @@
                     <button type="button" class="btn-modal danger" id="deleteTaskBtn" style="display:none;" onclick="app.binCurrentTask()">Bin</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- CALENDAR MANAGER MODAL -->
+    <div class="modal" id="calendarManagerModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>Manage Holiday Calendars</h2>
+                <button class="modal-close" onclick="app.closeCalendarManager()">✕</button>
+            </div>
+            <div id="calendarManagerList" style="display:flex; flex-direction:column; gap:8px; max-height:240px; overflow-y:auto; margin-bottom:14px;"></div>
+            <div class="form-group">
+                <label>New Calendar Name</label>
+                <input autocomplete="off" type="text" id="newCalendarName" placeholder="e.g. UK Bank Holiday">
+            </div>
+            <div class="modal-buttons">
+                <button type="button" class="btn-modal primary" onclick="app.addCustomCalendar()">Add Calendar</button>
+                <button type="button" class="btn-modal secondary" onclick="app.closeCalendarManager()">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SUB CATEGORY RULES MODAL -->
+    <div class="modal" id="subCategoryRulesModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>Sub Category Rules</h2>
+                <button class="modal-close" onclick="app.closeSubCategoryRules()">✕</button>
+            </div>
+            <p class="cfg-hint" style="padding:0 2px;">Each sub category can ask for its own extra fields when picked on a task — e.g. "PO Advance Payment" asks for PO No and Type of Advance. Set that up here, once per sub category.</p>
+            <div id="subCategoryRulesList" style="display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; margin: 10px 0;"></div>
+            <div class="form-group">
+                <label>Sub Category Name</label>
+                <input autocomplete="off" type="text" id="scrName" placeholder="e.g. PO Advance Payment">
+            </div>
+            <div id="scrFieldRows" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;"></div>
+            <button type="button" class="fp-action-btn" onclick="app.addScrFieldRow()">+ Add Field</button>
+            <div class="modal-buttons" style="margin-top:14px;">
+                <button type="button" class="btn-modal primary" onclick="app.saveSubCategoryRule()">Save Sub Category</button>
+                <button type="button" class="btn-modal secondary" onclick="app.resetScrForm()">Clear Form</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TALLY NARRATION TYPES MODAL -->
+    <div class="modal" id="narrationRulesModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>Tally Narration Types</h2>
+                <button class="modal-close" onclick="app.closeNarrationRules()">✕</button>
+            </div>
+            <p class="cfg-hint" style="padding:0 2px;">Each type builds one sentence: "Being " + an optional % + a fixed phrase + the document number you enter at completion + any extra fields below + an optional note + this entry's Mail Chain. Mark one extra field "Lead" to put it first instead — "&lt;value&gt; : ..." — and drop the Mail Chain (e.g. Vendor Name on a COD charge).</p>
+            <div id="narrationRulesList" style="display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; margin: 10px 0;"></div>
+            <div class="form-group">
+                <label>Narration Type Name</label>
+                <input autocomplete="off" type="text" id="nrName" placeholder="e.g. Advance against Purchase Order">
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; color:var(--label-2); margin-bottom:14px; cursor:pointer;">
+                <input type="checkbox" id="nrHasPercent" style="width:auto;"> Has a % field (e.g. advance payments)
+            </label>
+            <div class="form-group">
+                <label>Fixed Phrase <span style="font-weight:400; text-transform:none; letter-spacing:0;">(ends right where the document number goes)</span></label>
+                <input autocomplete="off" type="text" id="nrPhrase" placeholder="e.g. Advance amount paid against Po No: ">
+            </div>
+            <div class="form-group">
+                <label>Document Field Label</label>
+                <input autocomplete="off" type="text" id="nrDocLabel" placeholder="e.g. PO No">
+            </div>
+            <div class="form-group">
+                <label>Extra Fields <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — whatever else this type needs to ask for)</span></label>
+                <div id="nrFieldRows" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;"></div>
+                <button type="button" class="fp-action-btn" onclick="app.addNrFieldRow()">+ Add Field</button>
+            </div>
+            <div class="modal-buttons" style="margin-top:14px;">
+                <button type="button" class="btn-modal primary" onclick="app.saveNarrationRule()">Save Narration Type</button>
+                <button type="button" class="btn-modal secondary" onclick="app.resetNrForm()">Clear Form</button>
+            </div>
         </div>
     </div>
 
@@ -1725,7 +1999,7 @@
                     <input autocomplete="off" type="text" id="holidayName" required placeholder="e.g. Republic Day">
                 </div>
                 <div class="form-group">
-                    <label>Holiday Calendar</label>
+                    <label>Holiday Calendar <a href="#" class="edit-options-btn" onclick="app.openCalendarManager(); return false;">Manage</a></label>
                     <select id="holidayType"></select>
                 </div>
                 <div class="form-group">
@@ -1786,6 +2060,10 @@
                 <input autocomplete="off" type="text" id="newListOptionInput" placeholder="Add new option">
                 <button type="button" onclick="app.addListOption()" class="btn-modal primary">Add</button>
             </div>
+            <label id="newCategorySubCategoryOption" style="display:none; align-items:center; gap:8px; font-size:0.82rem; color:var(--label-2); margin-top:8px; cursor:pointer;">
+                <input type="checkbox" id="newCategoryHasSubCategory" style="width:auto;">
+                This category needs a Sub Category (shown when an entry in it is marked Completed)
+            </label>
             <div class="lm-foot">
                 <button type="button" onclick="app.clearList()" class="btn-modal danger">Clear This List</button>
                 <button type="button" onclick="app.closeListManager()" class="btn-modal secondary">Done</button>
@@ -1834,6 +2112,7 @@
 
     <div id="toastContainer"></div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="./app.js"></script>
 </body>
-</html>
+</html>
