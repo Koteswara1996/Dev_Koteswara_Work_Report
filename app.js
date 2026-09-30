@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '67';
+const APP_BUILD = '68';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -103,6 +103,14 @@ const app = {
         return String(str === undefined || str === null ? '' : str)
             .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
             .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    },
+
+    // A value placed inside an inline handler, e.g. onclick="app.fn(${this.jsArg(x)})".
+    // escAttr() alone is NOT enough there: the browser decodes &#39; back to '
+    // before running the handler, so a name like  x');alert(1);//  would run.
+    // JSON-encode first (a valid, fully escaped JS string), then attribute-escape.
+    jsArg(val) {
+        return this.escAttr(JSON.stringify(String(val === undefined || val === null ? '' : val)));
     },
 
     newId() {
@@ -349,17 +357,30 @@ const app = {
         return (localStorage.getItem(CONFIG.TOKEN_KEY) || '').trim() || CONFIG.DEFAULT_TOKEN;
     },
 
+    // Every request carries the token and banking data, so it may only go to
+    // a Google Apps Script web app (personal or Workspace /a/macros/<domain>/).
+    SCRIPT_URL_RE: /^https:\/\/script\.google\.com\/(?:a\/macros\/[^/?#]+|macros)\/s\/[A-Za-z0-9_-]+\/exec$/,
+
+    isScriptUrl(url) { return this.SCRIPT_URL_RE.test(String(url || '').trim()); },
+
+    scriptUrl() {
+        const url = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim();
+        return this.isScriptUrl(url) ? url : '';
+    },
+
     // GET helper for the Gmail endpoints — same URL, token attached.
     cloudGetUrl(params) {
-        const SCRIPT_URL = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim();
+        const SCRIPT_URL = this.scriptUrl();
         if (!SCRIPT_URL) return '';
         const q = Object.assign({ username: this.currentUser || '', token: this.authToken() }, params || {});
         return SCRIPT_URL + '?' + Object.keys(q).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(q[k])).join('&');
     },
 
     cloudRequest(payload) {
-        const SCRIPT_URL = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim();
-        if (!SCRIPT_URL) return Promise.reject(new Error("Cloud URL is not configured (Setup)"));
+        const raw = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim();
+        if (!raw) return Promise.reject(new Error("Cloud URL is not configured (Setup)"));
+        const SCRIPT_URL = this.scriptUrl();
+        if (!SCRIPT_URL) return Promise.reject(new Error("The saved sheet link is not a Google Apps Script /exec URL — fix it in Config → Cloud Sync → Connection"));
         const body = Object.assign({}, payload, {
             username: payload.username || this.currentUser,
             token: this.authToken()
@@ -692,7 +713,7 @@ const app = {
                     const preview = (s.sampleText || '').replace(/\n/g, ' ').substring(0, 90);
                     return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                         <span style="flex:1; min-width:0; font-size:0.82rem; color:var(--label-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${this.escAttr(s.sampleText || '')}">${this.sanitize(preview)}${(s.sampleText || '').length > 90 ? '…' : ''}</span>
-                        <button type="button" class="btn-icon bad" onclick="app.deleteReportSample('${this.escAttr(s.id)}')" title="Delete sample">${this.SVGS.bin}</button>
+                        <button type="button" class="btn-icon bad" onclick="app.deleteReportSample(${this.jsArg(s.id)})" title="Delete sample">${this.SVGS.bin}</button>
                     </div>`;
                 }).join('');
             })
@@ -783,10 +804,10 @@ const app = {
                 box.innerHTML = items.map(f => `
                     <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                         <label style="display:flex; align-items:center; gap:8px; flex:1; min-width:0; cursor:pointer;">
-                            <input type="checkbox" ${f.active ? 'checked' : ''} onchange="app.toggleFixedTask('${this.escAttr(f.id)}', this.checked)" style="width:16px; height:16px; accent-color:var(--accent); flex:0 0 auto;">
+                            <input type="checkbox" ${f.active ? 'checked' : ''} onchange="app.toggleFixedTask(${this.jsArg(f.id)}, this.checked)" style="width:16px; height:16px; accent-color:var(--accent); flex:0 0 auto;">
                             <span style="font-size:0.86rem; color:var(--label); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this.sanitize(f.description)}</span>
                         </label>
-                        <button type="button" class="btn-icon bad" onclick="app.deleteFixedTask('${this.escAttr(f.id)}')" title="Delete">${this.SVGS.bin}</button>
+                        <button type="button" class="btn-icon bad" onclick="app.deleteFixedTask(${this.jsArg(f.id)})" title="Delete">${this.SVGS.bin}</button>
                     </div>
                 `).join('');
             })
@@ -876,7 +897,8 @@ const app = {
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) { this.reapExpiredSirens(); this.initAudio(); this.processEngine(); this.syncCycle(); }
         });
-        window.addEventListener('online', () => this.syncCycle());
+        // Back online: retry now instead of waiting out the offline backoff.
+        window.addEventListener('online', () => { this.syncBackoffUntil = 0; this.syncCycle(); });
 
         // Two windows of the app on one device (installed app + browser tab)
         // share storage. Each used to keep its own in-memory list and write
@@ -959,10 +981,10 @@ const app = {
             }
             case 'open-mail': {
                 const t = this.findTask(id);
-                if (t && t.emailId) window.open(this.gmailUrl(t.emailId), '_blank');
+                if (t && t.emailId) window.open(this.gmailUrl(t.emailId), '_blank', 'noopener');
                 break;
             }
-            case 'email-open': window.open(this.gmailUrl(id), '_blank'); break;
+            case 'email-open': window.open(this.gmailUrl(id), '_blank', 'noopener'); break;
             case 'email-ignore': this.ignoreEmail(id); break;
             case 'email-task': this.convertEmailToTask(id); break;
             case 'alarm-done': this.alarmAction('done', id); break;
@@ -1127,7 +1149,7 @@ const app = {
     },
 
     bumpCalendarTs() {
-        this.holidaysUpdatedAt = Date.now();
+        this.holidaysUpdatedAt = this.stamp();
         localStorage.setItem(CONFIG.HOLIDAYS_TS_KEY, String(this.holidaysUpdatedAt));
     },
 
@@ -1191,6 +1213,8 @@ const app = {
             if (manual) this.showToast('Add your sheet link in Config → Cloud Sync → Connection', 'info');
             return Promise.resolve();
         }
+        // A request stuck for too long (phone slept) must not block forever.
+        if (this._syncRunning && Date.now() - (this._syncStartedAt || 0) > this.REQUEST_TIMEOUT_MS + 10000) this._syncRunning = null;
         if (this._syncRunning) { this._syncAgain = true; this._syncAgainManual = this._syncAgainManual || manual; return this._syncRunning; }
 
         const st = this.syncState();
@@ -1214,9 +1238,14 @@ const app = {
         if (mark) mark.classList.add('busy');
         if (saver && (manual || batch.length || first)) saver.innerHTML = '<span class="dot" style="background:var(--blue)"></span> syncing…';
         this.syncInProgress = true;
+        this._syncStartedAt = Date.now();
+        const runId = (this._syncRunId = (this._syncRunId || 0) + 1);
         let ok = false;
 
         this._syncRunning = this.cloudRequest(payload).then(data => {
+            // A newer run took over after this one was judged stuck — its
+            // answer is stale, so it must not overwrite the newer state.
+            if (runId !== this._syncRunId) return;
             if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Sync failed');
             ok = true;
 
@@ -1265,12 +1294,14 @@ const app = {
             // More to send (first run, or a big batch)? Go again right away.
             if (first || dirty.length > batch.length || this.hasLocalChanges()) this._syncAgain = true;
         }).catch(err => {
+            if (runId !== this._syncRunId) return;
             console.error('Sync error:', err);
             this._syncAgain = false;
             this.noteSyncResult(false, err && err.message);
             if (saver) saver.innerHTML = '<span class="dot" style="background:var(--amber)"></span> ' + (navigator.onLine ? 'retrying…' : 'offline — saved here');
             if (manual) this.showToast((err && err.message) || 'Sync failed — your entries are safe on this device.', 'error');
         }).then(() => {
+            if (runId !== this._syncRunId) return;
             this.syncInProgress = false;
             if (mark) mark.classList.remove('busy');
             this._syncRunning = null;
@@ -1313,9 +1344,6 @@ const app = {
         if (!manual && !this.claimSyncLeader()) return;
         // Don't swap dropdowns under an open editor.
         if (!manual && this.editorOpen()) return;
-        // A request stuck for too long (phone slept) must not block forever.
-        if (this._syncRunning && Date.now() - (this._syncStartedAt || 0) > this.REQUEST_TIMEOUT_MS + 10000) this._syncRunning = null;
-        this._syncStartedAt = Date.now();
         this.runSync({ manual: manual });
     },
 
@@ -1351,7 +1379,7 @@ const app = {
         const btn = document.getElementById('connTestBtn');
         const url = (document.getElementById('syncUrlInput').value || '').trim();
         const show = (ok, html) => { out.className = 'conn-result ' + (ok ? 'ok' : 'bad'); out.innerHTML = html; out.style.display = 'block'; };
-        if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) {
+        if (!this.isScriptUrl(url)) {
             show(false, '<b>URL looks wrong.</b> It must look like https://script.google.com/macros/s/…/exec (copy it from Deploy → Manage deployments).');
             return;
         }
@@ -1388,11 +1416,18 @@ const app = {
     saveSyncUrlModal() {
         const url = document.getElementById('syncUrlInput').value.trim();
         const idx = document.getElementById('gmailIndexInput').value.trim() || '0';
-        if (url && !/\/exec$/.test(url)) {
-            this.showToast("The Apps Script URL must end in /exec", "warning");
+        if (url && !this.isScriptUrl(url)) {
+            this.showToast("Use the Apps Script web app link: https://script.google.com/macros/s/…/exec", "warning");
             return;
         }
-        if (url) localStorage.setItem(CONFIG.SYNC_URL_KEY, url);
+        const prev = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim();
+        if (url && url !== prev) {
+            localStorage.setItem(CONFIG.SYNC_URL_KEY, url);
+            // A different sheet knows nothing of what the old one acknowledged:
+            // start over with a full download + upload of every local entry,
+            // instead of a delta that would silently skip them.
+            if (prev) this.resetSyncState();
+        }
         localStorage.setItem(CONFIG.GMAIL_INDEX_KEY, idx);
         document.getElementById('syncSetupModal').classList.remove('open');
         this.syncPaused = ''; this.syncBackoffUntil = 0;
@@ -1517,7 +1552,7 @@ const app = {
     },
 
     openStoredEmail() {
-        if (this.storedEmailId) window.open(this.gmailUrl(this.storedEmailId), '_blank');
+        if (this.storedEmailId) window.open(this.gmailUrl(this.storedEmailId), '_blank', 'noopener');
     },
 
     /* ---------- AUDIO / NOTIFICATIONS ---------- */
@@ -1934,15 +1969,15 @@ const app = {
                 <div class="alarm-deadline" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); font-size: 0.78rem; color: var(--red-ink);">
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
                         <span style="font-weight:700;">⏰ Deadline crossed: ${this.formatDateStr(task.deadlineDate)} at ${task.deadlineTime ? this.formatTimeStr(task.deadlineTime) : '11:59 PM'}</span>
-                        <button type="button" class="btn-row" onclick="app.acknowledgeDeadline('${idAttr}')" style="padding:5px 10px; font-size:0.74rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:9px; cursor:pointer;">Acknowledge</button>
+                        <button type="button" class="btn-row" onclick="app.acknowledgeDeadline(${this.jsArg(task.id)})" style="padding:5px 10px; font-size:0.74rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:9px; cursor:pointer;">Acknowledge</button>
                     </div>
                 </div>` : '';
             const nonWorkingBanner = nonWorking ? `
                 <div class="alarm-nonworking" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.25); font-size: 0.78rem; color: var(--amber-ink);">
                     <div style="font-weight:700; margin-bottom:6px;">This due date falls on a holiday, Sunday, or leave day.</div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                        <button type="button" class="btn-row" onclick="app.resolveNonWorkingDue('${idAttr}', 'today')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:10px; cursor:pointer;">Do it today anyway</button>
-                        <button type="button" class="btn-row go" onclick="app.resolveNonWorkingDue('${idAttr}', 'next')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Move to next working day</button>
+                        <button type="button" class="btn-row" onclick="app.resolveNonWorkingDue(${this.jsArg(task.id)}, 'today')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:10px; cursor:pointer;">Do it today anyway</button>
+                        <button type="button" class="btn-row go" onclick="app.resolveNonWorkingDue(${this.jsArg(task.id)}, 'next')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Move to next working day</button>
                     </div>
                 </div>` : '';
 
@@ -1968,7 +2003,7 @@ const app = {
                         <button type="button" class="btn-row go" data-action="alarm-reschedule" data-id="${idAttr}" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--blue-ink); background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.2); border-radius: 10px; cursor: pointer;">Move</button>
                     </span>
                     <span class="alarm-field" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
-                        <select id="alarmRec_${idAttr}" onchange="app.changeAlarmRecurrence('${idAttr}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--violet-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
+                        <select id="alarmRec_${idAttr}" onchange="app.changeAlarmRecurrence(${this.jsArg(task.id)}, this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--violet-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
                             <option value="None"${task.recurrence === 'None' || !task.recurrence ? ' selected' : ''}>Doesn't repeat</option>
                             <option value="Daily"${task.recurrence === 'Daily' ? ' selected' : ''}>Daily</option>
                             <option value="Weekly"${task.recurrence === 'Weekly' ? ' selected' : ''}>Weekly</option>
@@ -2505,7 +2540,7 @@ const app = {
 
     saveLists(bump = true) {
         if (bump) {
-            this.listsUpdatedAt = Date.now();
+            this.listsUpdatedAt = this.stamp();
             localStorage.setItem(CONFIG.LISTS_TS_KEY, String(this.listsUpdatedAt));
         }
         localStorage.setItem(CONFIG.LISTS_KEY, JSON.stringify(this.lists));
@@ -2571,7 +2606,7 @@ const app = {
 
     saveHolidays(bump = true) {
         if (bump) {
-            this.holidaysUpdatedAt = Date.now();
+            this.holidaysUpdatedAt = this.stamp();
             localStorage.setItem(CONFIG.HOLIDAYS_TS_KEY, String(this.holidaysUpdatedAt));
         }
         localStorage.setItem(CONFIG.HOLIDAYS_KEY, JSON.stringify(this.holidays));
@@ -2642,7 +2677,7 @@ const app = {
         box.innerHTML = days.map(d => `
             <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                 <span style="flex:1; font-size:0.86rem; color:var(--label);">${this.formatDateStr(d, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                <button type="button" class="btn-icon bad" onclick="app.deleteLeaveDay('${this.escAttr(d)}')" title="Remove">${this.SVGS.bin}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteLeaveDay(${this.jsArg(d)})" title="Remove">${this.SVGS.bin}</button>
             </div>
         `).join('');
     },
@@ -2756,7 +2791,7 @@ const app = {
             const isBuiltIn = builtIn.indexOf(name) !== -1;
             return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                 <span style="flex:1; font-size:0.86rem; color:var(--label);">${this.sanitize(name)}${isBuiltIn ? ' <span style=\"color:var(--label-2); font-weight:400;\">(built-in)</span>' : ''}</span>
-                ${isBuiltIn ? '' : `<button type="button" class="btn-icon bad" onclick="app.deleteCustomCalendar('${this.escAttr(name)}')" title="Delete">${this.SVGS.bin}</button>`}
+                ${isBuiltIn ? '' : `<button type="button" class="btn-icon bad" onclick="app.deleteCustomCalendar(${this.jsArg(name)})" title="Delete">${this.SVGS.bin}</button>`}
             </div>`;
         }).join('');
     },
@@ -4511,8 +4546,8 @@ const app = {
                     <div style="font-weight:700; font-size:0.88rem; color:var(--label);">${this.sanitize(sc.name)}</div>
                     <div style="font-size:0.76rem; color:var(--label-2);">${this.sanitize(summary)}</div>
                 </div>
-                <button type="button" class="btn-icon" onclick="app.editSubCategoryRule('${this.escAttr(sc.id)}')" title="Edit">${this.SVGS.edit}</button>
-                <button type="button" class="btn-icon bad" onclick="app.deleteSubCategoryRule('${this.escAttr(sc.id)}')" title="Delete">${this.SVGS.bin}</button>
+                <button type="button" class="btn-icon" onclick="app.editSubCategoryRule(${this.jsArg(sc.id)})" title="Edit">${this.SVGS.edit}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteSubCategoryRule(${this.jsArg(sc.id)})" title="Delete">${this.SVGS.bin}</button>
             </div>`;
         }).join('');
     },
@@ -4669,8 +4704,8 @@ const app = {
                     <div style="font-weight:700; font-size:0.88rem; color:var(--label);">${this.sanitize(nr.name)}</div>
                     <div style="font-size:0.76rem; color:var(--label-2);">Being ${nr.hasPercent ? '[%] ' : ''}${this.sanitize(nr.phrase)}[${this.sanitize(nr.docLabel)}]${extra ? ' · Fields: ' + this.sanitize(extra) : ''}</div>
                 </div>
-                <button type="button" class="btn-icon" onclick="app.editNarrationRule('${this.escAttr(nr.id)}')" title="Edit">${this.SVGS.edit}</button>
-                <button type="button" class="btn-icon bad" onclick="app.deleteNarrationRule('${this.escAttr(nr.id)}')" title="Delete">${this.SVGS.bin}</button>
+                <button type="button" class="btn-icon" onclick="app.editNarrationRule(${this.jsArg(nr.id)})" title="Edit">${this.SVGS.edit}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteNarrationRule(${this.jsArg(nr.id)})" title="Delete">${this.SVGS.bin}</button>
             </div>`;
         }).join('');
     },
@@ -5824,8 +5859,8 @@ const app = {
 
         const next = holiday.nextWorkingDay;
         hint.innerHTML = '<span>' + this.sanitize(holiday.name) + ' — banks are closed that day.</span>' +
-            (next ? '<button type="button" onclick="app.useNextWorkingDay(\'' + this.escAttr(next) +
-                '\')">Move to ' + this.formatDateStr(next, { day: 'numeric', month: 'short' }) + '</button>' : '');
+            (next ? '<button type="button" onclick="app.useNextWorkingDay(' + this.jsArg(next) +
+                ')">Move to ' + this.formatDateStr(next, { day: 'numeric', month: 'short' }) + '</button>' : '');
         hint.style.display = 'flex';
     },
 
@@ -5923,7 +5958,7 @@ const app = {
         hint.classList.add('clash');
         hint.innerHTML = '<span>' + this.sanitize(clash.description) + ' already holds ' +
             this.formatTimeStr(clash.dueTime) + '.</span>' +
-            (free ? '<button type="button" onclick="app.useSlotTime(\'' + this.escAttr(free) + '\')">Use ' +
+            (free ? '<button type="button" onclick="app.useSlotTime(' + this.jsArg(free) + ')">Use ' +
                 this.formatTimeStr(free) + '</button>' : '');
         hint.style.display = 'flex';
     },
@@ -6246,6 +6281,7 @@ const security = {
     FAIL_KEY: 'pureEnergyPinFails',
     MAX_TRIES: 5,
     LOCKOUT_MS: 30000,
+    LOCKOUT_MAX_MS: 3600000,
     ITER: 150000,
     TIMEOUTS: [[0, 'Immediately'], [1, '1 minute'], [2, '2 minutes'], [5, '5 minutes'], [10, '10 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 hour']],
 
@@ -6288,7 +6324,23 @@ const security = {
         return Date.now() - this.lastActive() >= ms;
     },
 
-    fails() { return Object.assign({ count: 0, until: 0 }, this.read(this.FAIL_KEY, {})); },
+    fails() { return Object.assign({ count: 0, until: 0, strikes: 0 }, this.read(this.FAIL_KEY, {})); },
+
+    // One wrong PIN, wherever it was typed (lock screen or Config panel).
+    // Each run of MAX_TRIES misses freezes entry for longer — 30 s, 1, 2, 4 …
+    // up to 60 min — and strikes only reset on a correct PIN, so a 4-digit
+    // PIN can't be walked through at 10 guesses a minute.
+    noteFail() {
+        const f = this.fails();
+        f.count = (Number(f.count) || 0) + 1;
+        if (f.count >= this.MAX_TRIES) {
+            f.strikes = (Number(f.strikes) || 0) + 1;
+            f.until = Date.now() + Math.min(this.LOCKOUT_MAX_MS, this.LOCKOUT_MS * Math.pow(2, f.strikes - 1));
+            f.count = 0;
+        }
+        this.write(this.FAIL_KEY, f);
+        return f;
+    },
     lockoutLeft() { return Math.max(0, (Number(this.fails().until) || 0) - Date.now()); },
 
     /* ---------- crypto ---------- */
@@ -6564,10 +6616,7 @@ const security = {
             this.unlock(true);
             return;
         }
-        const f = this.fails();
-        f.count = (Number(f.count) || 0) + 1;
-        if (f.count >= this.MAX_TRIES) { f.until = Date.now() + this.LOCKOUT_MS; f.count = 0; }
-        this.write(this.FAIL_KEY, f);
+        const f = this.noteFail();
         this.entry = '';
         this.renderDots();
         const card = document.getElementById('lockCard');
@@ -6592,7 +6641,8 @@ const security = {
                 if (msg) msg.textContent = '';
                 return;
             }
-            if (msg) msg.textContent = 'Too many wrong tries · try again in ' + s + 's';
+            if (msg) msg.textContent = 'Too many wrong tries · try again in ' +
+                (s >= 60 ? Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's' : s + 's');
         };
         tick();
         this._countdown = setInterval(tick, 500);
@@ -6603,6 +6653,9 @@ const security = {
             'If Cloud Sync is set up they come back from your sheet on the next pull.\n\nAnything not yet synced will be lost. Continue?')) return;
         try {
             localStorage.removeItem(CONFIG.STORAGE_KEY);
+            // Without this the next pull is a delta from the old cursor and the
+            // wiped entries never come back from the sheet.
+            if (window.app && app.resetSyncState) app.resetSyncState();
             localStorage.removeItem(this.PIN_KEY);
             localStorage.removeItem(this.FAIL_KEY);
             this.write(this.STATE_KEY, { locked: false, ts: Date.now() });
@@ -6664,9 +6717,7 @@ const security = {
         if (this.hasPin()) {
             if (this.lockoutLeft() > 0) { app.showToast('Too many wrong tries — wait ' + Math.ceil(this.lockoutLeft() / 1000) + 's', 'warning'); return; }
             if (!(await this.checkPin(cur))) {
-                const f = this.fails(); f.count = (Number(f.count) || 0) + 1;
-                if (f.count >= this.MAX_TRIES) { f.until = Date.now() + this.LOCKOUT_MS; f.count = 0; }
-                this.write(this.FAIL_KEY, f);
+                this.noteFail();
                 app.showToast('Current PIN is wrong', 'error'); return;
             }
         }
@@ -6685,7 +6736,7 @@ const security = {
         const cur = el ? el.value.trim() : '';
         if (this.lockoutLeft() > 0) { app.showToast('Too many wrong tries — wait ' + Math.ceil(this.lockoutLeft() / 1000) + 's', 'warning'); return; }
         if (!cur) { app.showToast('Enter your current PIN to remove it', 'info'); if (el) el.focus(); return; }
-        if (!(await this.checkPin(cur))) { app.showToast('Current PIN is wrong', 'error'); return; }
+        if (!(await this.checkPin(cur))) { this.noteFail(); app.showToast('Current PIN is wrong', 'error'); return; }
         localStorage.removeItem(this.PIN_KEY);
         this.write(this.FAIL_KEY, { count: 0, until: 0 });
         this.renderPanel(); this.updateLockButton();
@@ -6912,4 +6963,4 @@ const pwa = {
         }
     }
 };
-pwa.init();
+pwa.init();
