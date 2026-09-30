@@ -2,255 +2,900 @@
 <html lang="en" data-theme="pearl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Banking Work Tracker</title>
-    <link rel="manifest" href="./manifest.json">
-    <meta name="theme-color" content="#f2f2f7">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#e2e8f2">
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+    <meta name="description" content="Track banking follow-ups, payment deadlines and mail chains.">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./favicon.png" sizes="64x64" type="image/png">
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>Banking Work Tracker — Web Application Dashboard</title>
+    <script>
+        /* Paint in the saved theme before the first frame, so neither the boot
+           screen nor the app flashes Pearl on the way to your chosen theme. */
+        (function () {
+            try {
+                var t = localStorage.getItem('pureEnergyTheme');
+                if (t) document.documentElement.setAttribute('data-theme', t);
+                var sizes = { small: '87.5%', default: '100%', large: '112.5%', xlarge: '125%' };
+                var ts = localStorage.getItem('pureEnergyTextSize');
+                if (ts && sizes[ts]) document.documentElement.style.fontSize = sizes[ts];
+            } catch (e) {}
+            window.__bootAt = Date.now();
+
+            /* Decide the shell before anything paints. A phone asking for the
+               desktop site fakes a ~980px viewport but still reports a coarse
+               pointer, so check both. app.js reuses this exact function. */
+            window.__shell = function () {
+                var w = window.innerWidth || document.documentElement.clientWidth || 1024;
+                var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+                if (w <= 900) return 'mobile';
+                if (coarse && w <= 1180) return 'mobile';
+                return 'desktop';
+            };
+            document.documentElement.setAttribute('data-shell', window.__shell());
+        })();
+    </script>
     <style>
+        /* =========================================================
+           Banking Work Tracker — UI Styles & Themes
+           ========================================================= */
+
+        /* ── THEME 1: Pearl (iOS Default) ──────────────────────── */
+        :root, html[data-theme="pearl"] {
+            --canvas-bg: linear-gradient(145deg, #e8edf5 0%, #dce4f0 40%, #e4dff5 100%);
+            --canvas-solid: #e2e8f2;
+            --glass-bg:        rgba(255, 255, 255, 0.62);
+            --glass-bg-hover:  rgba(255, 255, 255, 0.82);
+            --glass-header-bg: rgba(242, 242, 247, 0.78);
+            --glass-th-bg:     rgba(248, 248, 252, 0.92);
+            --glass-modal-bg:  rgba(255, 255, 255, 0.72);
+            --glass-border:    rgba(255, 255, 255, 0.55);
+            --glass-border-subtle: rgba(255, 255, 255, 0.45);
+            --glass-specular:  rgba(255, 255, 255, 0.80);
+            --glass-shadow:    0 8px 40px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0,0,0,0.04);
+            --glass-shadow-sm: 0 4px 20px rgba(0, 0, 0, 0.05);
+            --glass-inset:     inset 0 1px 0 rgba(255,255,255,0.8);
+            --label: #1c1c1e; --label-2: #8e8e93; --label-3: #aeaeb2;
+            --separator: rgba(60,60,67,0.1); --line: rgba(60,60,67,0.1); --line-strong: rgba(60,60,67,0.18);
+            --fill: rgba(120,120,128,0.08); --fill-2: rgba(120,120,128,0.14);
+            --input-bg: rgba(255,255,255,0.7);
+            --accent: #007aff; --blue: #007aff; --blue-ink: #0055cc;
+            --red: #ff3b30; --red-ink: #c9000a; --green: #34c759; --green-ink: #1a7d33;
+            --amber: #ff9500; --amber-ink: #8f4a00; --violet: #af52de; --violet-ink: #6e2a9e;
+            --slate: #8e8e93; color-scheme: light;
+        }
+
+        /* ── THEME 2: Glassmorphism ──────────────────────────────── */
+        html[data-theme="glass"] {
+            --canvas-bg: linear-gradient(135deg, #a8c8ff 0%, #c9b6ff 35%, #ffc2e8 70%, #a5f0e4 100%);
+            --canvas-solid: #bfc9f5;
+            --glass-bg:        rgba(255, 255, 255, 0.34);
+            --glass-bg-hover:  rgba(255, 255, 255, 0.52);
+            --glass-header-bg: rgba(255, 255, 255, 0.42);
+            --glass-th-bg:     rgba(255, 255, 255, 0.68);
+            --glass-modal-bg:  rgba(255, 255, 255, 0.46);
+            --glass-border:    rgba(255, 255, 255, 0.62);
+            --glass-border-subtle: rgba(255, 255, 255, 0.42);
+            --glass-specular:  rgba(255, 255, 255, 0.92);
+            --glass-shadow:    0 12px 44px rgba(49, 46, 129, 0.18), 0 2px 10px rgba(49, 46, 129, 0.08);
+            --glass-shadow-sm: 0 6px 22px rgba(49, 46, 129, 0.12);
+            --glass-inset:     inset 0 1px 0 rgba(255,255,255,0.95);
+            --label: #1e1b4b; --label-2: #4c469c; --label-3: #8b87c9;
+            --separator: rgba(49,46,129,0.14); --line: rgba(255,255,255,0.45); --line-strong: rgba(255,255,255,0.7);
+            --fill: rgba(255,255,255,0.26); --fill-2: rgba(255,255,255,0.42);
+            --input-bg: rgba(255,255,255,0.46);
+            --accent: #4f46e5; --blue: #2563eb; --blue-ink: #3730a3;
+            --red: #f43f5e; --red-ink: #9f1239; --green: #10b981; --green-ink: #065f46;
+            --amber: #f59e0b; --amber-ink: #92400e; --violet: #8b5cf6; --violet-ink: #5b21b6;
+            --slate: #4c469c; color-scheme: light;
+        }
+        html[data-theme="glass"] .stat-tile, html[data-theme="glass"] .appbar,
+        html[data-theme="glass"] .cfg-section, html[data-theme="glass"] .mini-tile,
+        html[data-theme="glass"] .single-line-toolbar, html[data-theme="glass"] .tabbar,
+        html[data-theme="glass"] .modal-content, html[data-theme="glass"] .ms-options,
+        html[data-theme="glass"] .table-container, html[data-theme="glass"] .tcard {
+            backdrop-filter: saturate(200%) blur(40px) !important;
+            -webkit-backdrop-filter: saturate(200%) blur(40px) !important;
+        }
+
+        /* ── THEME 3: Neumorphism (Soft UI) ──────────────────────── */
+        html[data-theme="neuo"] {
+            --canvas-bg: linear-gradient(145deg, #e8edf4 0%, #e2e8f0 100%);
+            --canvas-solid: #e6ebf2;
+            --glass-bg:        #e9eef5;
+            --glass-bg-hover:  #eef2f8;
+            --glass-header-bg: #e9eef5;
+            --glass-th-bg:     #e4eaf2;
+            --glass-modal-bg:  #e9eef5;
+            --glass-border:    transparent;
+            --glass-border-subtle: transparent;
+            --glass-specular:  transparent;
+            --glass-shadow:    8px 8px 18px rgba(163,177,198,0.55), -8px -8px 18px rgba(255,255,255,0.95);
+            --glass-shadow-sm: 5px 5px 12px rgba(163,177,198,0.45), -5px -5px 12px rgba(255,255,255,0.9);
+            --glass-inset:     inset 0 0 0 1px rgba(255,255,255,0.35);
+            --label: #2d3a4e; --label-2: #7688a1; --label-3: #9dabbd;
+            --separator: rgba(163,177,198,0.35); --line: rgba(163,177,198,0.4); --line-strong: rgba(163,177,198,0.6);
+            --fill: rgba(163,177,198,0.16); --fill-2: rgba(163,177,198,0.3);
+            --input-bg: #e4eaf2;
+            --accent: #5b7cfa; --blue: #5b7cfa; --blue-ink: #3a55c9;
+            --red: #f4736b; --red-ink: #c0392b; --green: #4fc38a; --green-ink: #2a8259;
+            --amber: #f0a441; --amber-ink: #a9661a; --violet: #9b7ff0; --violet-ink: #6b4ec2;
+            --slate: #7688a1; color-scheme: light;
+        }
+        html[data-theme="neuo"] .stat-tile, html[data-theme="neuo"] .appbar,
+        html[data-theme="neuo"] .cfg-section, html[data-theme="neuo"] .mini-tile,
+        html[data-theme="neuo"] .single-line-toolbar, html[data-theme="neuo"] .tabbar,
+        html[data-theme="neuo"] .modal-content, html[data-theme="neuo"] .ms-options,
+        html[data-theme="neuo"] .table-container, html[data-theme="neuo"] .tcard {
+            backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+        }
+        html[data-theme="neuo"] .btn-icon, html[data-theme="neuo"] .filter-input, html[data-theme="neuo"] .filter-select, html[data-theme="neuo"] .ms-header {
+            border: none;
+            box-shadow: 4px 4px 9px rgba(163,177,198,0.45), -4px -4px 9px rgba(255,255,255,0.92);
+        }
+        html[data-theme="neuo"] .btn-icon:active, html[data-theme="neuo"] .filter-input:focus, html[data-theme="neuo"] .filter-select:focus {
+            box-shadow: inset 4px 4px 9px rgba(163,177,198,0.5), inset -4px -4px 9px rgba(255,255,255,0.92);
+        }
+        html[data-theme="neuo"] td, html[data-theme="neuo"] th { background: transparent !important; }
+        html[data-theme="neuo"] tbody tr:hover td { background: rgba(255,255,255,0.45) !important; }
+
+        /* ── THEME 4: Claymorphism (Soft 3D) ─────────────────────── */
+        html[data-theme="clay"] {
+            --canvas-bg: linear-gradient(145deg, #e3e9ff 0%, #f0e6ff 45%, #dff0ff 100%);
+            --canvas-solid: #e7ecff;
+            --glass-bg:        rgba(255, 255, 255, 0.78);
+            --glass-bg-hover:  rgba(255, 255, 255, 0.92);
+            --glass-header-bg: rgba(255, 255, 255, 0.82);
+            --glass-th-bg:     rgba(250, 249, 255, 0.95);
+            --glass-modal-bg:  rgba(255, 255, 255, 0.86);
+            --glass-border:    rgba(255, 255, 255, 0.85);
+            --glass-border-subtle: rgba(255, 255, 255, 0.6);
+            --glass-specular:  rgba(255, 255, 255, 0.95);
+            --glass-shadow:    0 18px 34px rgba(109, 92, 214, 0.20), 0 6px 12px rgba(109, 92, 214, 0.12);
+            --glass-shadow-sm: 0 12px 24px rgba(109, 92, 214, 0.16);
+            --glass-inset:     inset 0 -8px 14px rgba(139, 92, 246, 0.14), inset 0 8px 12px rgba(255, 255, 255, 0.95);
+            --label: #312152; --label-2: #7a6aa8; --label-3: #b0a4d0;
+            --separator: rgba(109,92,214,0.14); --line: rgba(109,92,214,0.16); --line-strong: rgba(109,92,214,0.26);
+            --fill: rgba(139,92,246,0.08); --fill-2: rgba(139,92,246,0.16);
+            --input-bg: rgba(255,255,255,0.8);
+            --accent: #7c5cf0; --blue: #5b8def; --blue-ink: #3b5bc9;
+            --red: #fb7185; --red-ink: #be123c; --green: #4ade80; --green-ink: #15803d;
+            --amber: #fbbf24; --amber-ink: #b45309; --violet: #a78bfa; --violet-ink: #6d28d9;
+            --slate: #7a6aa8; color-scheme: light;
+        }
+        html[data-theme="clay"] .stat-tile, html[data-theme="clay"] .mini-tile, html[data-theme="clay"] .cfg-section,
+        html[data-theme="clay"] .tcard, html[data-theme="clay"] .table-container, html[data-theme="clay"] .single-line-toolbar,
+        html[data-theme="clay"] .empty-state { border-radius: 32px; }
+        html[data-theme="clay"] .btn-icon, html[data-theme="clay"] .filter-input, html[data-theme="clay"] .filter-select,
+        html[data-theme="clay"] .ms-header, html[data-theme="clay"] .btn-modal { border-radius: 18px; }
+        html[data-theme="clay"] .appbar-mark { border-radius: 16px; }
+
+        /* ── THEME 5: The 3D Hero Object ─────────────────────────── */
+        html[data-theme="hero3d"] {
+            --canvas-bg: radial-gradient(1100px 620px at 18% -8%, #3b2a7a 0%, transparent 58%),
+                         radial-gradient(950px 560px at 92% 8%, #0e5e6e 0%, transparent 55%),
+                         linear-gradient(160deg, #0d1020 0%, #141936 55%, #0a0d1c 100%);
+            --canvas-solid: #10142a;
+            --glass-bg:        rgba(36, 41, 74, 0.60);
+            --glass-bg-hover:  rgba(48, 54, 94, 0.78);
+            --glass-header-bg: rgba(20, 25, 52, 0.82);
+            --glass-th-bg:     rgba(26, 31, 60, 0.95);
+            --glass-modal-bg:  rgba(28, 33, 64, 0.86);
+            --glass-border:    rgba(148, 163, 255, 0.20);
+            --glass-border-subtle: rgba(148, 163, 255, 0.13);
+            --glass-specular:  rgba(190, 200, 255, 0.35);
+            --glass-shadow:    0 26px 60px rgba(0, 0, 0, 0.55), 0 8px 20px rgba(79, 70, 229, 0.28);
+            --glass-shadow-sm: 0 14px 34px rgba(0, 0, 0, 0.45);
+            --glass-inset:     inset 0 1px 0 rgba(190, 200, 255, 0.22);
+            --label: #eef1ff; --label-2: #a9b2e0; --label-3: #6f78a8;
+            --separator: rgba(148,163,255,0.16); --line: rgba(148,163,255,0.18); --line-strong: rgba(148,163,255,0.32);
+            --fill: rgba(148,163,255,0.11); --fill-2: rgba(148,163,255,0.20);
+            --input-bg: rgba(16, 20, 44, 0.72);
+            --accent: #818cf8; --blue: #60a5fa; --blue-ink: #bfdbfe;
+            --red: #fb7185; --red-ink: #fecdd3; --green: #34d399; --green-ink: #a7f3d0;
+            --amber: #fbbf24; --amber-ink: #fde68a; --violet: #c084fc; --violet-ink: #e9d5ff;
+            --slate: #8b95c9; color-scheme: dark;
+        }
+        html[data-theme="hero3d"] .toast { color: #0d1020; background: #dfe4ff; }
+        html[data-theme="hero3d"] .toast-action { color: #312e81; background: rgba(49,46,129,0.12); border-color: rgba(49,46,129,0.3); }
+        html[data-theme="hero3d"] .appbar-mark {
+            background: linear-gradient(150deg, #a5b4fc 0%, #6366f1 46%, #3730a3 100%);
+            box-shadow: 0 12px 26px rgba(67, 56, 202, 0.6), inset 0 2px 3px rgba(255,255,255,0.55), inset 0 -3px 6px rgba(30, 27, 75, 0.6);
+        }
+        html[data-theme="hero3d"] .boot-tile { filter: drop-shadow(0 22px 46px rgba(99, 102, 241, 0.55)); }
+
+        /* ── GLOBAL BLUR MIXIN ── */
+        .stat-tile, .appbar, .cfg-section, .mini-tile, .single-line-toolbar, .tabbar, .modal-content, .ms-options, .table-container {
+            backdrop-filter: saturate(180%) blur(28px); -webkit-backdrop-filter: saturate(180%) blur(28px);
+        }
+
+        /* ── ROOT CONSTANTS ─────────────────────────────────────── */
         :root {
-            --bg: #f2f2f7;
-            --fill: rgba(0, 0, 0, 0.04);
-            --fill-2: rgba(0, 0, 0, 0.08);
-            --line: rgba(0, 0, 0, 0.12);
-            --line-strong: rgba(0, 0, 0, 0.2);
-            --label: #1c1c1e;
-            --label-2: #8e8e93;
-            --accent: #007aff;
-            --red: #ff3b30;
-            --green: #34c759;
-            --glass-modal-bg: rgba(255, 255, 255, 0.95);
-            --glass-border: rgba(255, 255, 255, 0.4);
-            --input-bg: #ffffff;
-        }
-        [data-theme="hero3d"] {
-            --bg: #10142a;
-            --fill: rgba(255, 255, 255, 0.06);
-            --fill-2: rgba(255, 255, 255, 0.12);
-            --line: rgba(255, 255, 255, 0.12);
-            --line-strong: rgba(255, 255, 255, 0.24);
-            --label: #ffffff;
-            --label-2: #a1a1aa;
-            --glass-modal-bg: rgba(20, 24, 45, 0.96);
-            --glass-border: rgba(255, 255, 255, 0.1);
-            --input-bg: #181d38;
+            --appbar-h: 64px; --tabbar-h: 64px;
+            --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+            --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            --font-main: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+            --font-num: "SF Pro Display", "Inter", -apple-system, system-ui, sans-serif;
         }
 
-        body {
-            margin: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: var(--bg);
-            color: var(--label);
-            overflow-x: hidden;
-            transition: filter 0.2s ease;
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-main); -webkit-tap-highlight-color: transparent; }
+        html, body { height: 100%; height: 100dvh; overflow: hidden; -webkit-text-size-adjust: 100%; transition: filter 0.2s ease; }
+        body { display: flex; flex-direction: column; background: var(--canvas-bg); color: var(--label); font-size: 14px; line-height: 1.45; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 10px; }
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+        /* ── APP BAR ─────────────────────────────────────────────── */
+        .appbar {
+            order: -2; flex-shrink: 0; z-index: 60;
+            display: flex; align-items: center; justify-content: space-between; gap: 14px;
+            height: var(--appbar-h); padding: 0 32px;
+            background: var(--glass-header-bg); border-bottom: 1px solid var(--glass-border);
+            box-shadow: var(--glass-inset), 0 1px 0 var(--line), 0 4px 20px rgba(0,0,0,0.04);
+        }
+        .appbar-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+        .appbar-mark {
+            flex-shrink: 0; width: 34px; height: 34px; display: grid; place-items: center;
+            background: var(--accent); border-radius: 9px; color: #fff;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25);
+        }
+        .appbar-mark.busy svg { animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .appbar-mark svg { width: 18px; height: 18px; stroke: #fff; }
+        .appbar-title { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.015em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .appbar-sub { font-size: 0.8rem; color: var(--label-2); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .appbar-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .appbar-left > div { min-width: 0; }
+
+        .autosave {
+            display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px;
+            font-size: 0.75rem; font-weight: 600; color: var(--label-2);
+            background: var(--fill); border: 1px solid var(--glass-border-subtle);
+            border-radius: 20px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+        }
+        .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+
+        /* ── SEGMENTED TABS ────────────────────────────── */
+        .tabbar {
+            display: flex; align-items: center; gap: 4px; padding: 4px; background: var(--fill);
+            border: 1px solid var(--glass-border-subtle); border-radius: 13px; box-shadow: var(--glass-inset);
+        }
+        .tabbar-btn {
+            position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            height: 36px; padding: 0 18px; font-size: 0.85rem; font-weight: 600; color: var(--label-2);
+            background: transparent; border: none; border-radius: 9px; cursor: pointer; transition: all 0.2s var(--ease);
+        }
+        .tabbar-btn:hover { color: var(--label); background: var(--fill-2); }
+        .tabbar-btn.active {
+            color: var(--accent); background: var(--glass-bg);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08), var(--glass-inset); font-weight: 700;
+        }
+        .tabbar-ico { display: none; }
+        .badge {
+            min-width: 18px; height: 18px; padding: 0 5px; font-size: 0.65rem; font-weight: 700;
+            display: inline-flex; align-items: center; justify-content: center; border-radius: 20px;
+            color: var(--label-2); background: var(--fill-2);
+        }
+        .tabbar-btn.active .badge { background: var(--accent); color: #fff; }
+        .badge.red { color: #fff; background: var(--red); }
+
+        /* ── CONTENT AREA ────────────────────────────────────────── */
+        .content-area {
+            flex: 1 1 auto; min-height: 0; display: none;
+            overflow-y: auto; overflow-x: hidden; padding: 24px 28px 48px;
+            -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain;
+        }
+        .content-area.active { display: block; animation: viewFade 0.25s var(--ease) both; }
+        @keyframes viewFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        #dashboardTab { --gutter: max(16px, 1vw); }
+        #registerTab, #completedTab, #binTab, #holidaysTab { --gutter: max(16px, 1vw); padding: 18px var(--gutter) 48px; }
+
+        .dash-controls {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 24px;
+            padding: 12px 20px; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 18px;
+            box-shadow: var(--glass-shadow-sm), var(--glass-inset);
+            backdrop-filter: saturate(180%) blur(28px); -webkit-backdrop-filter: saturate(180%) blur(28px);
+        }
+        .dash-controls .filter-select { flex: 0 1 320px; min-width: 220px; }
+        .dash-controls > span { margin-left: auto; }
+
+        .greet { margin-bottom: 14px; }
+        .greet-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+        .greet-hint { font-size: 0.82rem; font-weight: 600; color: var(--label-3); }
+        .greet h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.025em; line-height: 1.2; }
+        .greet p { margin-top: 2px; font-size: 1rem; color: var(--label-2); font-weight: 500; }
+        .greet p b { color: var(--accent); font-weight: 700; }
+
+        tbody tr[data-record-id] { cursor: pointer; }
+        tbody tr[data-record-mode="bin"] { cursor: default; }
+        .tcard[data-record-id] { cursor: pointer; }
+        .tcard[data-record-mode="bin"] { cursor: default; }
+        .action-cell, .tcard-actions, .mailchain, .tcard-chips { cursor: default; }
+
+        /* ── TABLE TOOLBAR ───────────────────────────────────────── */
+        .toolbar-row {
+            position: sticky; top: 0; z-index: 150;
+            margin: -18px calc(var(--gutter, 16px) * -1) 0px;
+            background: var(--glass-header-bg); border-bottom: 1px solid var(--glass-border);
+            backdrop-filter: saturate(180%) blur(32px); -webkit-backdrop-filter: saturate(180%) blur(32px);
+            box-shadow: 0 1px 0 var(--line), 0 4px 16px rgba(0,0,0,0.04);
+        }
+        .single-line-toolbar {
+            display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;
+            overflow-x: auto; padding: 12px var(--gutter, 16px);
+        }
+        .single-line-toolbar::-webkit-scrollbar { display: none; }
+        .search-compact { flex: 0 0 180px; min-width: 140px; height: 38px; }
+        .toolbar-filters { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; }
+        .toolbar-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+
+        .compact-toolbar {
+            display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+            padding: 12px var(--gutter, 16px); position: relative;
+        }
+        .compact-toolbar > .btn-icon, .compact-toolbar > .btn-new-entry { flex: 0 0 auto; }
+        .toolbar-search-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
+        .toolbar-search-wrap .search-compact { width: 100%; flex: 1 1 auto; min-width: 0; padding-right: 34px; }
+        .search-cancel-btn {
+            display: none; position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+            width: 24px; height: 24px; border-radius: 50%; border: none; background: var(--separator);
+            color: var(--label-2); font-size: 0.72rem; cursor: pointer; align-items: center; justify-content: center;
+        }
+        .gear-btn { position: relative; flex: 0 0 auto; }
+        .gear-dot { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%; background: var(--red); border: 2px solid var(--glass-header-bg); display: none; }
+        
+        .filter-panel {
+            display: none; position: absolute; top: calc(100% + 6px); right: var(--gutter, 16px); z-index: 60;
+            width: min(320px, calc(100vw - 32px)); max-height: min(70vh, 520px); overflow-y: auto;
+            background: var(--glass-modal-bg); border: 1px solid var(--line); border-radius: 16px;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.22); padding: 14px; flex-direction: column; gap: 12px;
+        }
+        .filter-panel.open { display: flex; }
+        .filter-panel-group label { display: block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--label-2); margin-bottom: 6px; }
+        .filter-panel-group .multi-select, .filter-panel-group .filter-select { width: 100%; }
+        
+        .fp-action-btn {
+            display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 10px;
+            background: var(--input-bg); border: 1px solid var(--line); font-size: 0.8rem; font-weight: 600;
+            color: var(--label); cursor: pointer; flex: 1 1 auto; justify-content: center; white-space: nowrap;
+        }
+        .fp-action-btn.danger { color: var(--red-ink); }
+        #taskKeyPoints { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        .keypoint-row { display: flex; gap: 8px; align-items: center; }
+        .keypoint-row .kp-key { flex: 0 0 38%; }
+        .keypoint-row .kp-value { flex: 1 1 auto; min-width: 0; }
+        .keypoint-row input { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--input-bg); color: var(--label); font-size: 0.86rem; }
+        .keypoint-row .kp-remove { flex: 0 0 auto; }
+
+        .compact-toolbar.search-expanded > *:not(.toolbar-search-wrap) { display: none !important; }
+        .compact-toolbar.search-expanded .toolbar-search-wrap { flex: 1 1 100%; }
+        .compact-toolbar.search-expanded .search-cancel-btn { display: flex; }
+
+        .filter-input, .filter-select, .ms-header {
+            display: flex; align-items: center; height: 38px; padding: 0 12px;
+            font-size: 0.8rem; color: var(--label); font-weight: 500;
+            background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; outline: none;
+            transition: all 0.2s var(--ease); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+        }
+        .filter-input:focus, .filter-select:focus, .ms-header:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+        .filter-select { width: 100%; min-width: 0; cursor: pointer; }
+
+        .btn-new-entry { 
+            height: 38px; width: 38px; padding: 0; border-radius: 11px; 
+            font-size: 1.4rem; font-weight: 700; display: flex; align-items: center; justify-content: center; 
+            color: #fff; background: var(--accent); border: none; cursor: pointer;
+            box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 1px 0 rgba(255,255,255,0.25);
+            transition: all 0.2s var(--ease);
+        }
+        .btn-new-entry:hover { transform: translateY(-2px); box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 50%, transparent); }
+
+        .sub-text { display: flex; justify-content: space-between; align-items: center; padding: 12px 4px; font-size: 0.85rem; color: var(--label-2); font-weight: 600; }
+
+        /* ── MULTI-SELECT DROPDOWN ───────────────────────────────── */
+        .multi-select { position: relative; width: 100%; min-width: 0; }
+        .multi-select .ms-header { width: 100%; justify-content: space-between; cursor: pointer; user-select: none; }
+        .ms-header > span, .ms-header { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ms-header::after { content: '▾'; margin-left: 8px; font-size: 0.85rem; color: var(--label-3); }
+        .ms-options {
+            position: fixed; top: 0; left: 0; z-index: 900; display: none; overflow-y: auto; padding: 8px;
+            background: var(--glass-modal-bg); border: 1px solid var(--glass-border); border-radius: 18px;
+            box-shadow: var(--glass-shadow), var(--glass-inset);
+        }
+        .ms-options.open { display: block; animation: dropFade 0.18s var(--ease) both; }
+        @keyframes dropFade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+        .ms-options label {
+            display: flex; align-items: center; gap: 10px; padding: 12px 16px; font-size: 0.9rem;
+            color: var(--label); cursor: pointer; border-radius: 10px; transition: background 0.15s; font-weight: 500;
+        }
+        .ms-options label:hover, .ms-options label.active { background: var(--fill); }
+        .ms-options input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; width: 18px; height: 18px; }
+
+        /* ── TABLE STYLES ────────────────────────────────────────── */
+        .table-wrap { position: relative; overflow: visible; background: transparent; border: none; box-shadow: none; padding-bottom: 20px; }
+        .table-container { 
+            width: 100%; overflow-x: auto; overflow-y: auto;
+            max-height: calc(100vh - var(--appbar-h) - 120px);
+            border-radius: 20px; border: 1px solid var(--glass-border); background: var(--glass-bg);
+            box-shadow: var(--glass-shadow), var(--glass-inset);
+        }
+        table { width: 100%; border-collapse: collapse; text-align: left; table-layout: fixed; }
+        #registerTable  { min-width: 1060px; }
+        #completedTable { min-width: 820px; }
+        #binTable       { min-width: 700px; }
+        #holidaysTable  { min-width: 700px; }
+
+        #registerColgroup col:nth-child(1) { width: 96px; }
+        #registerColgroup col:nth-child(2) { width: auto; }
+        #registerColgroup col:nth-child(3) { width: 148px; }
+        #registerColgroup col:nth-child(4) { width: 112px; }
+        #registerColgroup col:nth-child(5) { width: 136px; }
+        #registerColgroup col:nth-child(6) { width: 132px; }
+        #registerColgroup col:nth-child(7) { width: 150px; }
+        #registerColgroup col:nth-child(8) { width: 116px; }
+
+        #completedColgroup col:nth-child(1) { width: 112px; }
+        #completedColgroup col:nth-child(2) { width: auto; }
+        #completedColgroup col:nth-child(3) { width: 160px; }
+        #completedColgroup col:nth-child(4) { width: 136px; }
+        #completedColgroup col:nth-child(5) { width: 116px; }
+
+        #binColgroup col:nth-child(1) { width: 120px; }
+        #binColgroup col:nth-child(2) { width: auto; }
+        #binColgroup col:nth-child(3) { width: 160px; }
+        #binColgroup col:nth-child(4) { width: 116px; }
+
+        #holidaysColgroup col:nth-child(1) { width: 168px; }
+        #holidaysColgroup col:nth-child(2) { width: auto; }
+        #holidaysColgroup col:nth-child(3) { width: 168px; }
+        #holidaysColgroup col:nth-child(4) { width: 180px; }
+        #holidaysColgroup col:nth-child(5) { width: 100px; }
+        
+        thead { position: sticky; top: 0; z-index: 20; }
+        th { 
+            position: relative; font-weight: 700; color: var(--label-2); 
+            font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; cursor: pointer; user-select: none;
+            padding: 13px 16px; background: var(--glass-th-bg) !important;
+            backdrop-filter: saturate(180%) blur(28px) !important; -webkit-backdrop-filter: saturate(180%) blur(28px) !important;
+            border-bottom: 1.5px solid var(--line-strong); box-shadow: inset 0 1px 0 var(--glass-specular);
+        }
+        th:first-child { border-radius: 19px 0 0 0; }
+        th:last-child  { border-radius: 0 19px 0 0; }
+        th:hover { color: var(--label); background: color-mix(in srgb, var(--glass-th-bg) 90%, var(--accent) 10%) !important; }
+        th span { margin-left: 5px; color: var(--accent); }
+        
+        td { 
+            background: var(--glass-bg); padding: 13px 16px; 
+            font-size: 0.86rem; vertical-align: middle; line-height: 1.45; border-bottom: 1px solid var(--line);
+            transition: background 0.15s var(--ease);
+        }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover td { background: var(--glass-bg-hover); }
+
+        .td-clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .td-task { vertical-align: top; font-weight: 600; color: var(--label); line-height: 1.4; overflow-wrap: break-word; }
+        .td-task .task-line { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: normal; }
+        .td-task .mailchain span { flex: 1 1 auto; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .due-text { white-space: nowrap; font-weight: 600; font-family: var(--font-num); }
+        .td-empty { color: var(--label-3); }
+        .col-resize { position: absolute; top: 0; right: 0; width: 6px; bottom: 0; cursor: col-resize; transition: background 0.15s; }
+        .col-resize:hover, .col-resize.active { background: var(--accent); }
+
+        .dot-priority { display: inline-block; width: 9px; height: 9px; margin-right: 8px; border-radius: 50%; vertical-align: middle; }
+        .dot-High   { background: var(--red);   box-shadow: 0 0 7px var(--red); }
+        .dot-Medium { background: var(--amber);  box-shadow: 0 0 7px var(--amber); }
+        .dot-Low    { background: var(--green);  box-shadow: 0 0 7px var(--green); }
+
+        .status-pill {
+            display: inline-flex; align-items: center; padding: 4px 12px; font-size: 0.72rem; font-weight: 700;
+            border-radius: 20px; border: 1px solid transparent; letter-spacing: 0.02em; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+        }
+        .status-pill.Completed  { color: var(--green-ink); background: rgba(52,199,89,0.12); border-color: rgba(52,199,89,0.25); }
+        .status-pill.Pending    { color: var(--amber-ink); background: rgba(255,149,0,0.10); border-color: rgba(255,149,0,0.22); }
+        .status-pill.In-Progress{ color: var(--blue-ink);  background: rgba(0,122,255,0.10); border-color: rgba(0,122,255,0.22); }
+
+        .action-cell { white-space: nowrap; }
+        .action-cell .btn-icon { vertical-align: middle; margin-left: 6px; }
+        .btn-icon {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 32px; height: 32px; border-radius: 9px; font-size: 1.1rem;
+            color: var(--label-2); background: var(--fill); border: 1px solid var(--glass-border-subtle);
+            cursor: pointer; transition: all 0.15s var(--ease);
+        }
+        .btn-icon svg { width: 16px; height: 16px; stroke-width: 2.2; }
+        .btn-icon:hover { background: var(--glass-bg); color: var(--label); border-color: var(--glass-border); transform: translateY(-1px); box-shadow: var(--glass-shadow-sm); }
+        .btn-icon:active { transform: scale(0.92); }
+        .btn-icon.go:hover   { color: var(--blue-ink);  border-color: rgba(0,122,255,0.3);   background: rgba(0,122,255,0.08); }
+        .btn-icon.ok:hover   { color: var(--green-ink); border-color: rgba(52,199,89,0.3);   background: rgba(52,199,89,0.08); }
+        .btn-icon.warn:hover { color: var(--amber-ink); border-color: rgba(255,149,0,0.3);   background: rgba(255,149,0,0.08); }
+        .btn-icon.bad:hover  { color: var(--red-ink);   border-color: rgba(255,59,48,0.3);   background: rgba(255,59,48,0.08); }
+
+        .rec-badge, .skip-badge { display: inline-block; margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; font-weight: 700; border-radius: 10px; }
+        .rec-badge { color: var(--violet-ink); background: rgba(175,82,222,0.10); }
+        .skip-badge { color: var(--label-2); background: var(--fill); }
+        .mailchain { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.82rem; color: var(--blue-ink); font-weight: 500; }
+        
+        .btn-copy { flex: 0 0 auto; display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 8px; color: var(--blue-ink); background: rgba(0,122,255,0.08); border: 1px solid rgba(0,122,255,0.18); cursor: pointer; transition: all 0.15s var(--ease); }
+        .btn-copy:hover { background: rgba(0,122,255,0.16); }
+        .btn-copy svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+        .btn-copy.done { color: var(--green-ink); background: rgba(52,199,89,0.14); border-color: var(--green); }
+        .due-flag { color: var(--red-ink); font-weight: 800; }
+        .due-time { font-weight: 600; color: var(--label-2); }
+
+        /* ── MOBILE CARDS ────────────────────────────────────────── */
+        .card-list { display: flex; flex-direction: column; gap: 12px; }
+        .tcard {
+            position: relative; padding: 12px 16px 12px 18px; border-radius: 16px;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-shadow-sm), var(--glass-inset); transition: all 0.2s var(--ease);
+            backdrop-filter: saturate(180%) blur(28px); -webkit-backdrop-filter: saturate(180%) blur(28px);
+        }
+        .tcard::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 4px; border-radius: 0 4px 4px 0; background: var(--slate); }
+        .tcard[data-priority="High"]::before   { background: var(--red);   box-shadow: 0 0 10px var(--red); }
+        .tcard[data-priority="Medium"]::before { background: var(--amber); }
+        .tcard[data-priority="Low"]::before    { background: var(--green); }
+        .tcard.is-overdue { background: rgba(255,59,48,0.05); border-color: rgba(255,59,48,0.22); }
+        .tcard-title { font-size: 0.98rem; font-weight: 700; line-height: 1.3; color: var(--label); }
+        .tcard-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .tcard-row .tcard-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+        .tcard-row .status-pill { flex: 0 0 auto; white-space: nowrap; }
+        .tcard-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; font-size: 0.76rem; font-weight: 600; border-radius: 20px; color: var(--label-2); background: var(--fill); border: 1px solid var(--glass-border-subtle); }
+        .chip.cat  { color: var(--blue-ink);  background: rgba(0,122,255,0.07);  border-color: rgba(0,122,255,0.15); }
+        .chip.rec  { color: var(--violet-ink); background: rgba(175,82,222,0.07); border-color: rgba(175,82,222,0.15); }
+        .chip.mail { color: var(--blue-ink); cursor: pointer; max-width: 100%; min-width: 0; }
+        .chip.mail svg { flex: 0 0 auto; width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; }
+        .chip .chip-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tcard-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--separator); }
+        .tcard-due { font-size: 0.85rem; font-weight: 600; color: var(--label-2); font-family: var(--font-num); }
+        .tcard-due.overdue { color: var(--red-ink); font-weight: 800; }
+        .tcard-actions { display: flex; gap: 4px; }
+        .tcard-body { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; }
+        .tcard-body .tcard-chips { flex: 1 1 260px; min-width: 0; margin-top: 0; }
+        .tcard-body .tcard-foot { flex: 0 0 auto; margin: 0 0 0 auto; padding: 0; border-top: 0; }
+        html[data-shell="mobile"] .tcard-body .tcard-foot { flex: 1 1 100%; margin-left: 0; padding-top: 8px; border-top: 1px solid var(--separator); }
+
+        .empty-state { padding: 60px 20px; text-align: center; border-radius: 24px; background: var(--glass-bg); border: 1px dashed var(--line-strong); }
+        .empty-state strong { display: block; font-size: 1.1rem; font-weight: 800; margin-bottom: 6px; }
+        .empty-state span { font-size: 0.9rem; color: var(--label-2); font-weight: 500; }
+
+        /* ── MODALS ──────────────────────────────────────────────── */
+        .modal {
+            display: none; position: fixed; inset: 0; z-index: 1000; height: 100dvh;
+            padding: 24px; align-items: center; justify-content: center;
+            background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(20px) saturate(1.2); -webkit-backdrop-filter: blur(20px) saturate(1.2);
+        }
+        .modal.open { display: flex; animation: modalFade 0.2s var(--ease) both; }
+        @keyframes modalFade { from { opacity: 0; } to { opacity: 1; } }
+        .modal-content {
+            position: relative; width: 100%; max-width: 600px; max-height: 90dvh; padding: 32px;
+            overflow-y: auto; background: var(--glass-modal-bg); border: 1px solid var(--glass-border);
+            border-radius: 30px; box-shadow: 0 32px 80px rgba(0,0,0,0.22), var(--glass-inset);
+            animation: modalPop 0.3s var(--ease-spring) both;
+        }
+        @keyframes modalPop { from { opacity: 0; transform: scale(0.94) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+        .modal-sm { max-width: 480px; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; }
+        .modal-header h2 { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.02em; }
+        .modal-close { width: 36px; height: 36px; display: grid; place-items: center; font-size: 1rem; color: var(--label-2); background: var(--fill); border: 1px solid var(--glass-border-subtle); border-radius: 50%; cursor: pointer; transition: all 0.2s var(--ease); }
+        .modal-close:hover { color: var(--label); background: var(--fill-2); }
+        
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: flex; align-items: center; margin-bottom: 8px; font-size: 0.78rem; font-weight: 700; color: var(--label-2); letter-spacing: 0.05em; text-transform: uppercase; }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%; padding: 14px 16px; font-size: 0.95rem; color: var(--label); font-weight: 500;
+            background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 14px;
+            outline: none; transition: all 0.2s var(--ease); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+        }
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+        .form-group textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .form-row-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+        @media (min-width: 901px) and (max-width: 1100px) { .form-row-4 { grid-template-columns: repeat(2, 1fr); } }
+        .modal-wide { max-width: 1040px; }
+        .modal-buttons { display: flex; gap: 12px; margin-top: 32px; }
+        .btn-modal {
+            flex: 1; height: 48px; display: inline-flex; align-items: center; justify-content: center;
+            font-size: 0.95rem; font-weight: 700; border-radius: 16px; cursor: pointer; transition: all 0.2s var(--ease); border: none;
+        }
+        .btn-modal.primary { color: #fff; background: var(--accent); box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 rgba(255,255,255,0.2); }
+        .btn-modal.primary:hover { transform: translateY(-2px); box-shadow: 0 14px 28px color-mix(in srgb, var(--accent) 45%, transparent); }
+        .btn-modal.secondary { color: var(--label); background: var(--fill); border: 1px solid var(--glass-border); }
+        .btn-modal.secondary:hover { background: var(--fill-2); }
+        .btn-modal.danger { color: var(--red-ink); background: rgba(255,59,48,0.08); border: 1px solid rgba(255,59,48,0.2); }
+        .btn-modal.danger:hover { background: rgba(255,59,48,0.14); }
+
+        /* List manager */
+        #listManagerItems { background: var(--fill); border: 1px solid var(--line); border-radius: 16px; padding: 4px 6px; max-height: 260px; overflow-y: auto; }
+        .lm-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--separator); }
+        .lm-item:last-child { border-bottom: 0; }
+        .lm-name { flex: 1 1 auto; min-width: 0; font-size: 0.9rem; font-weight: 500; color: var(--label); overflow-wrap: anywhere; }
+        .lm-del { flex: 0 0 auto; width: 76px; padding: 6px 0; cursor: pointer; font-size: 0.8rem; font-weight: 700; color: var(--red-ink); background: rgba(255,59,48,0.08); border: 1px solid rgba(255,59,48,0.2); border-radius: 10px; }
+        .lm-del:hover { background: rgba(255,59,48,0.14); }
+        .add-row { display: flex; align-items: stretch; gap: 10px; margin-top: 12px; }
+        .add-row input { flex: 1 1 auto; min-width: 0; height: 46px; padding: 0 14px; font-size: 0.92rem; font-weight: 500; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--input-bg); color: var(--label); outline: none; }
+        .add-row input:focus { border-color: var(--accent); }
+        .add-row .btn-modal { flex: 0 0 88px; width: 88px; height: 46px; }
+        .lm-foot { display: flex; gap: 10px; margin-top: 16px; }
+        html[data-shell="mobile"] .lm-foot { flex-direction: column; }
+        html[data-shell="mobile"] .lm-foot .btn-modal, html[data-shell="mobile"] .modal-buttons .btn-modal { flex: 0 0 auto; }
+        html[data-shell="mobile"] .add-row .btn-modal { flex: 0 0 88px; width: 88px; }
+
+        /* ── CONFIG PANEL ────────────────────────────────────────── */
+        .sheet-stats { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+        .sheet-stat { text-align: center; flex: 1; padding: 14px 12px; border-radius: 18px; background: var(--glass-bg); border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow-sm), var(--glass-inset); backdrop-filter: saturate(180%) blur(28px); -webkit-backdrop-filter: saturate(180%) blur(28px); }
+        .sheet-stat b { display: block; font-size: 1.5rem; font-weight: 800; color: var(--accent); letter-spacing: -0.03em; }
+        .sheet-stat span { font-size: 0.72rem; color: var(--label-2); text-transform: uppercase; font-weight: 700; letter-spacing: 0.04em; }
+
+        .cfg-shell { display: flex; gap: 20px; align-items: flex-start; }
+        .cfg-nav { flex: 0 0 240px; display: flex; flex-direction: column; gap: 2px; border-radius: 20px; background: var(--glass-bg); border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow-sm), var(--glass-inset); overflow: hidden; padding: 6px; }
+        .cfg-nav-item { display: flex; align-items: center; gap: 10px; padding: 12px 12px; border-radius: 12px; background: transparent; border: none; text-align: left; cursor: pointer; font-size: 0.88rem; font-weight: 600; color: var(--label); }
+        .cfg-nav-item:hover { background: var(--fill); }
+        .cfg-nav-item.active { background: var(--accent); color: #fff; }
+        .cfg-nav-ico { flex: 0 0 auto; font-size: 1rem; }
+        .cfg-nav-label { flex: 1 1 auto; min-width: 0; }
+        .cfg-nav-chevron { flex: 0 0 auto; opacity: 0.5; font-size: 0.9rem; }
+        .cfg-nav-item.active .cfg-nav-chevron { opacity: 0.85; }
+
+        .cfg-panels { flex: 1 1 auto; min-width: 0; border-radius: 20px; background: var(--glass-bg); border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow-sm), var(--glass-inset); overflow: hidden; }
+        .cfg-panel { display: none; padding: 20px; border-bottom: none; }
+        .cfg-panel.active { display: block; }
+        .cfg-back-btn { display: none; width: 100%; text-align: left; padding: 14px 18px; border: none; border-bottom: 1px solid var(--separator); background: var(--fill); color: var(--accent); font-size: 0.9rem; font-weight: 700; cursor: pointer; }
+
+        html[data-shell="mobile"] .cfg-shell { flex-direction: column; }
+        html[data-shell="mobile"] .cfg-nav { flex: 1 1 auto; width: 100%; }
+        html[data-shell="mobile"] .cfg-panels { width: 100%; }
+        html[data-shell="mobile"] .cfg-shell:not(.showing-panel) .cfg-panels { display: none; }
+        html[data-shell="mobile"] .cfg-shell.showing-panel .cfg-nav { display: none; }
+        html[data-shell="mobile"] .cfg-shell.showing-panel .cfg-back-btn { display: block; }
+        
+        .sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+        .sheet-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 14px 8px; font-size: 0.8rem; font-weight: 700; color: var(--label); background: var(--fill); border: 1px solid var(--glass-border-subtle); border-radius: 14px; cursor: pointer; transition: all 0.2s var(--ease); }
+        .sheet-item:hover { background: var(--glass-bg); transform: translateY(-3px); box-shadow: var(--glass-shadow-sm); border-color: var(--accent); }
+        .sheet-item .ico { font-size: 1.2rem; }
+
+        .walk-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+        .walk-row .sheet-item { flex: 0 0 auto; min-width: 140px; height: 68px; }
+        .walk-toggle.is-off { opacity: 0.5; }
+        .walk-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.76rem; font-weight: 700; color: var(--label-2); }
+        .walk-field input { height: 44px; padding: 0 12px; font-size: 0.9rem; font-weight: 600; color: var(--label); background: var(--input-bg); border: 1px solid var(--line-strong); border-radius: 12px; outline: none; }
+        .walk-field input:focus { border-color: var(--accent); }
+        .walk-field input[type="number"] { width: 110px; }
+        html[data-shell="mobile"] .walk-row .sheet-item, html[data-shell="mobile"] .walk-field { flex: 1 1 140px; }
+        html[data-shell="mobile"] .walk-field input { width: 100%; }
+
+        .walk-card { padding: 14px 16px; border-radius: 16px; background: rgba(52,199,89,0.09); border: 1px solid rgba(52,199,89,0.25); }
+        .walk-card-time { font-size: 1rem; font-weight: 800; color: var(--green-ink); font-family: var(--font-num); }
+        .walk-card-sub { margin-top: 4px; font-size: 0.8rem; font-weight: 600; color: var(--label-2); }
+
+        .cfg-hint { margin: -4px 0 12px; font-size: 0.82rem; font-weight: 500; color: var(--label-2); line-height: 1.5; }
+        .sound-list { display: flex; flex-direction: column; gap: 8px; }
+        .sound-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--fill); border: 1px solid var(--glass-border-subtle); border-radius: 14px; cursor: pointer; transition: all 0.2s var(--ease); }
+        .sound-row:hover { background: var(--glass-bg); border-color: var(--accent); }
+        .sound-row.is-on { background: var(--glass-bg); border-color: var(--accent); box-shadow: var(--glass-shadow-sm); }
+        .sound-dot { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-strong); background: transparent; }
+        .sound-row.is-on .sound-dot { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--glass-bg); }
+        .sound-name { flex: 1 1 auto; font-size: 0.9rem; font-weight: 700; color: var(--label); }
+        .sound-row.is-on .sound-name { color: var(--accent); }
+        .sound-play { flex: 0 0 auto; display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--fill-2); color: var(--accent); cursor: pointer; }
+        .sound-play svg { width: 15px; height: 15px; }
+        .sound-play:hover { background: var(--glass-bg); }
+        
+        .theme-row { display: flex; gap: 10px; padding: 6px; background: var(--fill); border-radius: 16px; border: 1px solid var(--glass-border-subtle); flex-wrap: wrap; }
+        .theme-btn { flex: 1; min-width: 100px; height: 38px; border: none; background: transparent; border-radius: 12px; font-size: 0.85rem; font-weight: 600; color: var(--label-2); cursor: pointer; transition: all 0.2s var(--ease); }
+        .theme-btn.on { background: var(--glass-bg); color: var(--accent); font-weight: 700; box-shadow: var(--glass-shadow-sm), var(--glass-inset); }
+
+        /* ── TOASTS ──────────────────────────────────────────────── */
+        #toastContainer {
+            position: fixed; top: calc(var(--appbar-h) + 14px); left: 50%; transform: translateX(-50%);
+            z-index: 20000; width: min(520px, calc(100vw - 32px));
+            display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none;
+        }
+        .toast {
+            pointer-events: auto; min-width: 240px; padding: 14px 20px; text-align: left;
+            font-size: 0.9rem; font-weight: 600; color: #fff; background: var(--label);
+            border-radius: 16px; box-shadow: 0 12px 32px rgba(0,0,0,0.18);
+            animation: toastIn 0.3s var(--ease-spring) both;
+            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+        }
+        .toast.success { background: var(--green-ink); }
+        .toast.error   { background: var(--red-ink); }
+        .toast.warning { background: var(--amber-ink); }
+        .toast.info    { background: var(--blue-ink); }
+        @keyframes toastIn { from { opacity: 0; transform: translateY(-14px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .toast { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+        .toast-action {
+            flex: 0 0 auto; padding: 5px 12px; border-radius: 10px; cursor: pointer;
+            font-size: 0.78rem; font-weight: 800; letter-spacing: 0.02em;
+            color: var(--accent); background: rgba(0,122,255,0.10); border: 1px solid rgba(0,122,255,0.26);
+        }
+        .toast-action:hover { background: rgba(0,122,255,0.2); }
+
+        /* ── LAYOUT HELPERS ──────────────────────────────────────── */
+        body > .content-area { width: 100%; max-width: none; margin-left: 0; margin-right: 0; }
+        body > .content-area > * { max-width: none; margin-left: 0; margin-right: 0; }
+        body > #dashboardTab { padding: 24px var(--gutter) 48px; }
+
+        body[data-view="cards"] .card-list { display: flex !important; }
+        body[data-view="cards"] .table-wrap:not(.always) { display: none !important; }
+        body[data-view="table"] .card-list { display: none !important; }
+        body[data-view="table"] .table-wrap { display: block !important; }
+
+        .view-toggle { font-size: 0.95rem; line-height: 1; }
+
+        /* ── SWIPE ACTIONS ON CARDS ──────────────────────────────── */
+        .card-list .tcard { touch-action: pan-y; will-change: transform; }
+        .tcard.swipe-done { border-color: var(--green); box-shadow: 0 0 0 2px rgba(52,199,89,0.22); }
+        .tcard.swipe-bin  { border-color: var(--red);   box-shadow: 0 0 0 2px rgba(255,59,48,0.22); }
+        .swipe-hint { margin: 0 0 10px; font-size: 0.78rem; font-weight: 600; color: var(--label-3); text-align: center; }
+        body[data-view="table"] .swipe-hint { display: none; }
+        @media (hover: hover) and (pointer: fine) { .swipe-hint { display: none; } }
+
+        .due-hint {
+            display: none; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px;
+            padding: 10px 12px; border-radius: 12px; font-size: 0.82rem; font-weight: 600;
+            color: var(--amber-ink); background: rgba(255,149,0,0.10); border: 1px solid rgba(255,149,0,0.24);
+        }
+        .due-hint.ok { color: var(--green-ink); background: rgba(52,199,89,0.10); border-color: rgba(52,199,89,0.24); }
+        .due-hint.clash { color: var(--red-ink); background: rgba(255,59,48,0.10); border-color: rgba(255,59,48,0.24); }
+        .due-hint button { padding: 5px 11px; border-radius: 9px; cursor: pointer; font-size: 0.78rem; font-weight: 800; color: var(--blue-ink); background: rgba(0,122,255,0.10); border: 1px solid rgba(0,122,255,0.24); }
+
+        /* ── BULK SELECT ─────────────────────────────────────────── */
+        body.selecting tbody tr[data-record-id] td, body.selecting .card-list .tcard[data-record-id] { cursor: pointer; }
+        tr.is-selected td { background: rgba(0,122,255,0.13) !important; }
+        .tcard.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,122,255,0.26); }
+        body.selecting .card-list .tcard[data-record-id]::after { content: ''; position: absolute; right: 16px; top: 16px; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line-strong); background: var(--input-bg); }
+        body.selecting .card-list .tcard.is-selected::after { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--input-bg); }
+        .btn-icon.is-on { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+        #bulkBar {
+            display: none; position: fixed; z-index: 950; left: 50%; transform: translateX(-50%);
+            bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+            align-items: center; gap: 10px; padding: 10px 12px 10px 18px;
+            border-radius: 22px; max-width: calc(100vw - 24px); flex-wrap: wrap;
+            background: var(--glass-header-bg); border: 1px solid var(--glass-border);
+            box-shadow: 0 20px 48px rgba(0,0,0,0.18), var(--glass-inset);
+            backdrop-filter: saturate(180%) blur(28px); -webkit-backdrop-filter: saturate(180%) blur(28px);
+        }
+        #bulkBar.open { display: flex; }
+        #bulkCount { font-size: 0.86rem; font-weight: 800; color: var(--label); white-space: nowrap; }
+        #bulkBar button { padding: 8px 14px; border-radius: 13px; cursor: pointer; white-space: nowrap; font-size: 0.82rem; font-weight: 700; border: 1px solid var(--line-strong); background: var(--glass-bg); color: var(--label); }
+        #bulkBar button.ok   { color: var(--green-ink); border-color: rgba(52,199,89,0.3);  background: rgba(52,199,89,0.12); }
+        #bulkBar button.bad  { color: var(--red-ink);   border-color: rgba(255,59,48,0.3);  background: rgba(255,59,48,0.10); }
+        #bulkBar button.warn { color: var(--amber-ink); border-color: rgba(255,149,0,0.3);  background: rgba(255,149,0,0.10); }
+        html[data-shell="mobile"] #bulkBar { bottom: calc(var(--tabbar-h) + 26px + env(safe-area-inset-bottom, 0px)); }
+
+        /* ── COMPACT DASHBOARD TILES ─────────────────────────────── */
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; margin-bottom: 22px; }
+        .stat-tile {
+            position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+            padding: 14px 14px 13px 16px; text-align: left; cursor: pointer; border-radius: 16px; overflow: hidden;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-shadow-sm), var(--glass-inset);
+            transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease);
+        }
+        .stat-tile::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--tint, var(--slate)); }
+        .stat-tile:hover { transform: translateY(-2px); box-shadow: var(--glass-shadow), var(--glass-inset); }
+        .stat-tile:active { transform: scale(0.97); }
+        .stat-num { font-size: 1.6rem; font-weight: 800; line-height: 1.1; color: var(--tint, var(--label)); font-family: var(--font-num); letter-spacing: -0.02em; }
+        .stat-label { font-size: 0.8rem; font-weight: 700; color: var(--label); }
+        .stat-sub { font-size: 0.7rem; font-weight: 600; color: var(--label-3); }
+
+        .dash-section { margin-bottom: 20px; }
+        .dash-section h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px; font-size: 0.78rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--label-2); }
+        .dash-section h3 b { font-size: 0.72rem; font-weight: 700; color: var(--label-3); letter-spacing: 0; }
+
+        .mini-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(146px, 1fr)); gap: 8px; }
+        .mini-tile {
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            padding: 10px 12px; cursor: pointer; text-align: left; border-radius: 13px; background: var(--glass-bg);
+            border: 1px solid var(--glass-border-subtle); box-shadow: var(--glass-shadow-sm);
+            transition: transform 0.15s var(--ease), border-color 0.15s var(--ease);
+        }
+        .mini-tile:hover { transform: translateY(-1px); border-color: var(--tint, var(--line-strong)); }
+        .mini-tile:active { transform: scale(0.97); }
+        .mini-tile.is-static { cursor: default; }
+        .mini-tile.is-static:hover { transform: none; }
+        .mini-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; font-weight: 600; color: var(--label); }
+        .mini-num { flex: 0 0 auto; min-width: 24px; padding: 2px 7px; text-align: center; font-size: 0.78rem; font-weight: 800; font-family: var(--font-num); color: var(--tint, var(--label-2)); background: var(--fill); border-radius: 8px; }
+        .dash-none { font-size: 0.8rem; font-weight: 600; color: var(--label-3); padding: 2px 0 6px; }
+
+        @media (max-width: 420px) {
+            .stat-grid { grid-template-columns: repeat(2, 1fr); }
+            .mini-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        .card-list { display: none; }
+
+        /* ── MOBILE SHELL ───────────────────────────────────────── */
+        @keyframes sheetSlideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        html[data-shell="mobile"] .table-wrap:not(.always) { display: none; }
+        html[data-shell="mobile"] .table-wrap.always .table-container { max-height: 62vh; }
+        html[data-shell="mobile"] .appbar { padding: 0 16px; }
+        html[data-shell="mobile"] .appbar-title { font-size: 1.05rem; }
+        html[data-shell="mobile"] .tabbar {
+            order: 0; position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+            z-index: 90; margin: 0; height: var(--tabbar-h); padding: 6px; background: var(--glass-header-bg);
+            border: 1px solid var(--glass-border); border-radius: 26px; box-shadow: 0 20px 48px rgba(0,0,0,0.14), var(--glass-inset);
+        }
+        html[data-shell="mobile"] .tabbar-btn { flex: 1 1 0; flex-direction: column; gap: 4px; height: 100%; padding: 4px 2px; font-size: 0.7rem; border-radius: 18px; }
+        html[data-shell="mobile"] .tabbar-btn.active { background: var(--fill); box-shadow: none; }
+        html[data-shell="mobile"] .tabbar-ico { display: block; width: 24px; height: 24px; }
+        html[data-shell="mobile"] .tabbar-ico svg { width: 100%; height: 100%; stroke-width: 2; }
+        html[data-shell="mobile"] .tabbar-lbl { font-size: 0.7rem; font-weight: 600; line-height: 1; }
+        html[data-shell="mobile"] .tabbar-btn .badge { position: absolute; top: 4px; right: 50%; transform: translateX(18px); min-width: 18px; height: 18px; font-size: 0.65rem; padding: 0 5px; }
+        html[data-shell="mobile"] .content-area { padding: 16px 16px calc(var(--tabbar-h) + 48px + env(safe-area-inset-bottom, 0px)); }
+        html[data-shell="mobile"] #registerTab, html[data-shell="mobile"] #completedTab, html[data-shell="mobile"] #binTab, html[data-shell="mobile"] #holidaysTab { --gutter: 16px; padding: 16px 16px calc(var(--tabbar-h) + 48px + env(safe-area-inset-bottom, 0px)); }
+        html[data-shell="mobile"] body > #dashboardTab { --gutter: 16px; padding: 16px 16px calc(var(--tabbar-h) + 48px + env(safe-area-inset-bottom, 0px)); }
+        html[data-shell="mobile"] .dash-controls { gap: 10px; }
+        html[data-shell="mobile"] .dash-controls .filter-select { flex: 1 1 100%; }
+        html[data-shell="mobile"] .dash-controls > span { margin-left: 0; }
+        html[data-shell="mobile"] .toolbar-row { margin-top: -16px; }
+        html[data-shell="mobile"] .table-container { max-height: unset; }
+        html[data-shell="mobile"] .multi-select, html[data-shell="mobile"] .ms-header, html[data-shell="mobile"] .filter-select { width: 100%; max-width: 100%; }
+        html[data-shell="mobile"] .modal { align-items: flex-end; padding: 0; }
+        html[data-shell="mobile"] .modal-content { max-width: 100%; max-height: 85dvh; border-radius: 32px 32px 0 0; padding: 24px 24px calc(32px + env(safe-area-inset-bottom, 0px)); animation: sheetSlideUp 0.3s var(--ease-spring) both; }
+        html[data-shell="mobile"] .modal-header::before { content: ''; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 40px; height: 5px; border-radius: 4px; background: var(--line-strong); }
+        html[data-shell="mobile"] .form-row { grid-template-columns: 1fr; gap: 12px; }
+        html[data-shell="mobile"] .form-row-4 { grid-template-columns: 1fr; gap: 12px; }
+        html[data-shell="mobile"] .modal-buttons { flex-direction: column; }
+        html[data-shell="mobile"] .btn-modal { width: 100%; }
+        html[data-shell="mobile"] #toastContainer { top: calc(var(--appbar-h) + 10px); bottom: auto; width: calc(100vw - 24px); align-items: stretch; }
+        html[data-shell="mobile"] .toast { text-align: center; min-width: 0; justify-content: center; }
+
+        /* ── BOOT SPLASH ─────────────────────────────────────────── */
+        .boot {
+            position: fixed; inset: 0; z-index: 99999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 22px; background: var(--canvas-bg); background-attachment: fixed;
+            padding: env(safe-area-inset-top, 0px) 24px env(safe-area-inset-bottom, 0px);
+            transition: opacity 0.55s var(--ease), transform 0.55s var(--ease), visibility 0s linear 0.55s;
+        }
+        .boot.gone { opacity: 0; transform: scale(1.08); visibility: hidden; pointer-events: none; }
+        .boot-tile { width: 116px; height: 116px; filter: drop-shadow(0 18px 38px rgba(13, 148, 136, 0.34)); animation: bootPop 0.78s var(--ease-spring) both; }
+        .boot-tile svg { width: 100%; height: 100%; display: block; }
+        .boot-ring { stroke-dasharray: 189; stroke-dashoffset: 189; animation: bootDraw 1.05s var(--ease) 0.2s forwards; }
+        .boot-tick { stroke-dasharray: 46; stroke-dashoffset: 46; animation: bootDraw 0.42s var(--ease) 0.82s forwards; }
+        .boot-glow { transform-origin: 50px 50px; animation: bootHalo 1.9s var(--ease) 0.9s infinite; }
+        .boot-name { font-size: 1.12rem; font-weight: 800; letter-spacing: -0.02em; color: var(--label); text-align: center; animation: bootRise 0.6s var(--ease) 0.42s both; }
+        .boot-sub { margin-top: -14px; font-size: 0.82rem; font-weight: 600; color: var(--label-2); animation: bootRise 0.6s var(--ease) 0.56s both; }
+        .boot-bar { width: 128px; height: 4px; border-radius: 2px; overflow: hidden; background: var(--fill-2); animation: bootRise 0.6s var(--ease) 0.7s both; }
+        .boot-bar i { display: block; width: 42%; height: 100%; border-radius: 2px; background: linear-gradient(90deg, #2dd4bf, #0d9488); animation: bootSlide 1.15s var(--ease) infinite; }
+
+        @keyframes bootPop { 0% { opacity: 0; transform: scale(0.55) rotate(-9deg); } 60% { opacity: 1; } 100% { opacity: 1; transform: scale(1) rotate(0deg); } }
+        @keyframes bootDraw { to { stroke-dashoffset: 0; } }
+        @keyframes bootHalo { 0% { opacity: 0.42; transform: scale(1); } 55% { opacity: 0; transform: scale(1.35); } 100% { opacity: 0; transform: scale(1.35); } }
+        @keyframes bootRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes bootSlide { 0% { transform: translateX(-110%); } 100% { transform: translateX(245%); } }
+
+        body.booted .appbar { animation: shellDrop 0.5s var(--ease) both; }
+        body.booted .tabbar { animation: shellRise 0.5s var(--ease) 0.06s both; }
+        body.booted .content-area.active { animation: shellFade 0.55s var(--ease) 0.1s both; }
+        body.booted #appMark { animation: markPulse 0.9s var(--ease-spring) 0.18s both; }
+
+        @keyframes shellDrop { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: none; } }
+        @keyframes shellRise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+        @keyframes shellFade { from { opacity: 0; transform: translateY(10px) scale(0.995); } to { opacity: 1; transform: none; } }
+        @keyframes markPulse { 0% { transform: scale(0.6); opacity: 0; } 55% { transform: scale(1.14); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+
+        @media (prefers-reduced-motion: reduce) {
+            .boot-tile, .boot-name, .boot-sub, .boot-bar, .boot-bar i, .boot-glow,
+            body.booted .appbar, body.booted .tabbar, body.booted .content-area.active, body.booted #appMark { animation: none !important; }
+            .boot-ring, .boot-tick { stroke-dashoffset: 0; animation: none !important; }
+            .boot { transition: opacity 0.2s linear, visibility 0s linear 0.2s; }
+            .boot.gone { transform: none; }
         }
 
-        body.privacy-obscured {
+        /* ── PRIVACY LOCK ── */
+        body.privacy-obscured > *:not(#privacyLockOverlay) {
             filter: blur(28px) brightness(0.7);
             pointer-events: none;
             user-select: none;
         }
-
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 12px 18px;
-            background: var(--glass-modal-bg);
-            border-bottom: 1px solid var(--line);
-        }
-        .header-title { font-size: 1.1rem; font-weight: 800; }
-        .header-info { display: flex; align-items: center; gap: 12px; font-size: 0.8rem; color: var(--label-2); }
-        .save-indicator { display: flex; align-items: center; gap: 6px; }
-        .save-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
-
-        .tab-bar {
-            display: flex;
-            background: var(--fill);
-            border-bottom: 1px solid var(--line);
-            padding: 6px 12px;
-            gap: 6px;
-            overflow-x: auto;
-        }
-        .tab-btn {
-            background: transparent;
-            border: none;
-            padding: 8px 14px;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--label-2);
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            white-space: nowrap;
-        }
-        .tab-btn.active {
-            background: var(--input-bg);
-            color: var(--accent);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-        }
-        .tab-badge {
-            background: var(--fill-2);
-            padding: 1px 6px;
-            border-radius: 10px;
-            font-size: 0.72rem;
-        }
-
-        main { padding: 16px; max-width: 1100px; margin: 0 auto; }
-        .content-area { display: none; }
-        .content-area.active { display: block; }
-
-        .action-bar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 14px;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .search-input {
-            height: 36px;
-            border-radius: 10px;
-            border: 1px solid var(--line);
-            background: var(--input-bg);
-            padding: 0 12px;
-            font-size: 0.85rem;
-            color: var(--label);
-            width: min(280px, 100%);
-            box-sizing: border-box;
-        }
-        .btn-action {
-            height: 36px;
-            padding: 0 14px;
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            border-radius: 10px;
-            font-size: 0.85rem;
-            font-weight: 600;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            background: var(--input-bg);
-            border-radius: 14px;
-            overflow: hidden;
-            border: 1px solid var(--line);
-            font-size: 0.85rem;
-        }
-        .data-table th, .data-table td {
-            padding: 10px 14px;
-            text-align: left;
-            border-bottom: 1px solid var(--line);
-        }
-        .data-table th {
-            background: var(--fill);
-            font-weight: 700;
-            color: var(--label-2);
-            font-size: 0.75rem;
-            text-transform: uppercase;
-        }
-        .data-table tr:last-child td { border-bottom: none; }
-
-        .btn-row {
-            padding: 4px 8px;
-            border-radius: 6px;
-            border: 1px solid var(--line);
-            background: var(--fill);
-            color: var(--label);
-            font-size: 0.75rem;
-            font-weight: 600;
-            cursor: pointer;
-            margin-right: 4px;
-        }
-        .btn-row.ok { background: rgba(52, 199, 89, 0.12); color: var(--green); border-color: transparent; }
-        .btn-row.bad { background: rgba(255, 59, 48, 0.12); color: var(--red); border-color: transparent; }
-
-        /* COMPACT MODAL GRID */
-        #taskModal .modal-content {
-            max-width: 680px;
-            padding: 18px 22px;
-        }
-        .form-grid-2 {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px 14px;
-        }
-        .col-span-full { grid-column: 1 / -1; }
-        #taskModal .form-group { margin-bottom: 0; }
-        #taskModal .form-group label {
-            display: block;
-            font-size: 0.72rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: var(--label-2);
-            margin-bottom: 3px;
-        }
-        #taskModal input[type="text"],
-        #taskModal input[type="date"],
-        #taskModal input[type="time"],
-        #taskModal input[type="number"],
-        #taskModal select {
-            height: 34px !important;
-            padding: 5px 10px !important;
-            font-size: 0.82rem !important;
-            border-radius: 9px !important;
-            box-sizing: border-box;
-            background: var(--input-bg);
-            color: var(--label);
-            border: 1px solid var(--line);
-            width: 100%;
-        }
-        #taskModal textarea {
-            min-height: 52px !important;
-            padding: 6px 10px !important;
-            font-size: 0.82rem !important;
-            border-radius: 9px !important;
-            box-sizing: border-box;
-            background: var(--input-bg);
-            color: var(--label);
-            border: 1px solid var(--line);
-            width: 100%;
-            resize: vertical;
-        }
-        #taskModal .input-with-copy {
-            position: relative;
-            display: flex;
-            align-items: center;
-            width: 100%;
-        }
-        #taskModal .input-with-copy input {
-            width: 100% !important;
-            padding-right: 36px !important;
-        }
-        .btn-field-copy {
-            position: absolute;
-            right: 5px;
-            width: 24px;
-            height: 24px;
-            display: grid;
-            place-items: center;
-            background: var(--fill);
-            border: 1px solid var(--line);
-            border-radius: 6px;
-            color: var(--label-2);
-            cursor: pointer;
-            padding: 0;
-            transition: all 0.15s ease;
-            z-index: 2;
-        }
-        .btn-field-copy svg { width: 12px; height: 12px; pointer-events: none; }
-        .btn-field-copy:hover { background: var(--accent); border-color: var(--accent); color: #fff; transform: scale(1.05); }
-        .btn-field-copy.done { background: var(--green) !important; border-color: var(--green) !important; color: #fff !important; }
-
-        /* PRIVACY LOCK OVERLAY */
         #privacyLockOverlay {
             position: fixed; inset: 0; z-index: 999999;
             display: none; flex-direction: column; align-items: center; justify-content: center;
@@ -262,10 +907,8 @@
         .lock-box {
             width: min(340px, calc(100vw - 36px));
             padding: 28px 24px; text-align: center;
-            background: var(--glass-modal-bg);
-            border: 1px solid var(--glass-border);
-            border-radius: 28px;
-            box-shadow: 0 24px 64px rgba(0,0,0,0.35);
+            background: var(--glass-modal-bg); border: 1px solid var(--glass-border);
+            border-radius: 28px; box-shadow: 0 24px 64px rgba(0,0,0,0.35);
         }
         .lock-icon-ring {
             width: 58px; height: 58px; margin: 0 auto 12px;
@@ -290,434 +933,908 @@
         .pin-btn:hover { background: var(--fill-2); transform: translateY(-1px); }
         .pin-btn:active { transform: scale(0.92); }
 
-        .modal {
-            position: fixed; inset: 0; z-index: 1000;
-            display: none; align-items: center; justify-content: center;
-            background: rgba(0, 0, 0, 0.45);
-            backdrop-filter: blur(8px);
+        /* ── INPUT WITH COPY ── */
+        .input-with-copy { position: relative; display: flex; align-items: center; width: 100%; }
+        .input-with-copy input { width: 100% !important; padding-right: 36px !important; }
+        .btn-field-copy {
+            position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+            width: 26px; height: 26px; display: grid; place-items: center;
+            background: var(--fill); border: 1px solid var(--glass-border-subtle);
+            border-radius: 8px; color: var(--label-2); cursor: pointer;
+            transition: all 0.15s var(--ease); z-index: 2;
         }
-        .modal.open { display: flex; }
-        .modal-content {
-            background: var(--glass-modal-bg);
-            border: 1px solid var(--glass-border);
-            border-radius: 20px;
-            width: 92%;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
-            max-height: 90vh;
-            overflow-y: auto;
-        }
-        .modal-header { display: flex; justify-content: space-between; align-items: center; }
-        .modal-close { background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--label-2); }
-        .modal-buttons { display: flex; justify-content: flex-end; gap: 10px; }
-        .btn-modal { padding: 8px 16px; border-radius: 10px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
-        .btn-modal.primary { background: var(--accent); color: #fff; }
-        .btn-modal.secondary { background: var(--fill); color: var(--label); border-color: var(--line); }
+        .btn-field-copy svg { width: 13px; height: 13px; pointer-events: none; stroke: currentColor; fill: none; }
+        .btn-field-copy:hover { background: var(--accent); border-color: var(--accent); color: #fff; transform: translateY(-50%) scale(1.05); }
+        .btn-field-copy.done { background: var(--green) !important; border-color: var(--green) !important; color: #fff !important; }
 
-        #toastContainer {
-            position: fixed; bottom: 20px; right: 20px; z-index: 10000;
-            display: flex; flex-direction: column; gap: 8px; pointer-events: none;
-        }
-        .toast {
-            background: #1c1c1e; color: #fff; padding: 10px 16px; border-radius: 10px;
-            font-size: 0.85rem; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); pointer-events: auto;
-        }
-
-        @media (max-width: 480px) {
-            .form-grid-2 { grid-template-columns: 1fr; gap: 10px; }
+        /* ── PRINT ───────────────────────────────────────────────── */
+        @media print {
+            .appbar, .filter-bar, .single-line-toolbar, .screen-head, .dash-controls, .modal, #toastContainer, .tabbar { display: none !important; }
+            .content-area { display: none !important; padding: 0 !important; }
+            .content-area.active { display: block !important; }
+            .table-wrap { display: block !important; border: none !important; box-shadow: none !important; }
+            .table-container { max-height: none !important; overflow: visible !important; }
+            table { width: 100% !important; border-collapse: collapse !important; }
+            th, td { font-size: 10pt !important; color: #000 !important; background: #fff !important; border: 1px solid #ccc !important; }
         }
     </style>
 </head>
 <body>
-    <header id="mainAppHeader">
-        <div class="header-title" id="appMark">Banking Work Tracker</div>
-        <div class="header-info">
-            <span id="headerDate">--</span>
-            <div class="save-indicator" id="saveStatus">
-                <span class="dot"></span>
-                <span>ready</span>
+
+    <!-- Boot splash -->
+    <div class="boot" id="bootSplash" role="status" aria-label="Loading Banking Work Tracker">
+        <div class="boot-tile">
+            <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <defs>
+                    <linearGradient id="bootGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#2dd4bf"/>
+                        <stop offset="1" stop-color="#0d9488"/>
+                    </linearGradient>
+                </defs>
+                <rect width="100" height="100" rx="23" fill="url(#bootGrad)"/>
+                <circle class="boot-glow" cx="50" cy="50" r="30" fill="none" stroke="#fff" stroke-width="4"/>
+                <circle cx="50" cy="50" r="30" fill="none" stroke="#fff" stroke-opacity="0.30" stroke-width="8"/>
+                <circle class="boot-ring" cx="50" cy="50" r="30" fill="none" stroke="#fff" stroke-width="8"
+                        stroke-linecap="round" transform="rotate(-90 50 50)"/>
+                <path class="boot-tick" d="M36 51l10 10 20-22" fill="none" stroke="#fff" stroke-width="7"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </div>
+        <div class="boot-name">Banking Work Tracker</div>
+        <div class="boot-sub">PUR Energy</div>
+        <div class="boot-bar"><i></i></div>
+    </div>
+
+    <script>
+        setTimeout(function () {
+            var el = document.getElementById('bootSplash');
+            if (el && !el.classList.contains('gone')) {
+                el.classList.add('gone');
+                document.body.classList.add('booted');
+            }
+        }, 5000);
+    </script>
+
+    <!-- Header -->
+    <header class="appbar" id="mainAppHeader" style="display:none;">
+        <div class="appbar-left">
+            <span class="appbar-mark" id="appMark">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9"/><path d="M8.5 12.3l2.4 2.4 4.6-5"/>
+                </svg>
+            </span>
+            <div class="appbar-titles">
+                <div class="appbar-title" id="screenTitle">Overview</div>
+                <div class="appbar-sub" id="headerDate">—</div>
             </div>
-            <button type="button" class="btn-row" onclick="app.security.lock()" title="Privacy Lock">🔒 Lock</button>
+        </div>
+
+        <nav class="tabbar" id="tabBar" style="display:none;">
+            <button class="tabbar-btn active" data-tab="Dashboard" onclick="app.switchTab('Dashboard')">
+                <span class="tabbar-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg></span>
+                <span class="tabbar-lbl">Dashboard</span>
+            </button>
+            <button class="tabbar-btn" data-tab="Register" onclick="app.switchTab('Register')">
+                <span class="tabbar-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>
+                <span class="tabbar-lbl">Tasks</span>
+                <span class="badge" id="badgeRegister">0</span>
+            </button>
+            <button class="tabbar-btn" data-tab="Completed" onclick="app.switchTab('Completed')">
+                <span class="tabbar-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6.5 9.5 17 4 11.5"/></svg></span>
+                <span class="tabbar-lbl">Done</span>
+                <span class="badge" id="badgeCompletedTab">0</span>
+            </button>
+            <button class="tabbar-btn" data-tab="Holidays" onclick="app.switchTab('Holidays')">
+                <span class="tabbar-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+                <span class="tabbar-lbl">Holidays</span>
+            </button>
+            <button class="tabbar-btn" data-tab="Bin" onclick="app.switchTab('Bin')">
+                <span class="tabbar-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></span>
+                <span class="tabbar-lbl">Bin</span>
+                <span class="badge red" id="badgeBinTab">0</span>
+            </button>
+            <button class="tabbar-btn" data-tab="Config" onclick="app.switchTab('Config')">
+                <span class="tabbar-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg></span>
+                <span class="tabbar-lbl">Config</span>
+            </button>
+        </nav>
+
+        <div class="appbar-right">
+            <div class="autosave" id="saveStatus"><span class="dot"></span> Saved</div>
+            <button type="button" class="btn-icon" onclick="app.security.lock()" title="Privacy Lock" style="width: auto; padding: 0 10px; font-size: 0.85rem; font-weight: 600; gap: 4px;">🔒 Lock</button>
         </div>
     </header>
 
-    <nav class="tab-bar" id="tabBar">
-        <button type="button" class="tab-btn active" data-tab="Dashboard" onclick="app.switchTab('Dashboard')">
-            Dashboard
-        </button>
-        <button type="button" class="tab-btn" data-tab="Register" onclick="app.switchTab('Register')">
-            Register <span class="tab-badge" id="badgeRegister">0</span>
-        </button>
-        <button type="button" class="tab-btn" data-tab="Completed" onclick="app.switchTab('Completed')">
-            Completed <span class="tab-badge" id="badgeCompletedTab">0</span>
-        </button>
-        <button type="button" class="tab-btn" data-tab="Holidays" onclick="app.switchTab('Holidays')">
-            Holidays
-        </button>
-        <button type="button" class="tab-btn" data-tab="Config" onclick="app.switchTab('Config')">
-            Config
-        </button>
-        <button type="button" class="tab-btn" data-tab="Bin" onclick="app.switchTab('Bin')">
-            Bin <span class="tab-badge" id="badgeBinTab">0</span>
-        </button>
-    </nav>
+    <!-- OVERVIEW TAB -->
+    <div class="content-area" id="dashboardTab">
+        <div class="greet" id="dashGreeting"></div>
+        <div class="stat-grid" id="dashHero"></div>
+        <div id="dashCharts"></div>
+    </div>
 
-    <main>
-        <!-- DASHBOARD TAB -->
-        <section class="content-area active" id="dashboardTab">
-            <div class="action-bar">
-                <div style="font-size:1.1rem; font-weight:700;">Operational Overview</div>
-                <div>
-                    <button type="button" class="btn-action" onclick="app.openTaskModal()">+ New Task</button>
-                    <button type="button" class="btn-row" onclick="app.openSyncSetup()">Cloud Sync</button>
+    <!-- TASKS TAB -->
+    <div class="content-area" id="registerTab">
+        <div class="toolbar-row compact-toolbar" id="registerToolbar">
+            <div class="toolbar-search-wrap">
+                <input autocomplete="off" type="text" class="filter-input search-compact" id="searchInput" placeholder="Search tasks..." oninput="app.debouncedRender()" onfocus="app.expandSearch('register')">
+                <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('register')" title="Close search">✕</button>
+            </div>
+
+            <button type="button" class="btn-icon gear-btn" id="registerGearBtn" onclick="app.toggleFilterPanel('register')" title="Filter by category, priority, status, pending with, due date">⚙️<span class="gear-dot" id="registerFilterDot"></span></button>
+            <button type="button" class="btn-icon" onclick="app.toggleSelectMode()" title="Select several entries">☑</button>
+            <button type="button" class="btn-icon" id="sortToggleRegister" onclick="app.openSortMenu('Register', this)" title="Sort">🔃</button>
+            <button type="button" class="btn-icon" onclick="app.fitColumns('register')" title="Fit Columns">⤢</button>
+            <button type="button" class="btn-icon" onclick="app.printRegister()" title="Print">🖨️</button>
+            <button type="button" class="btn-icon" onclick="app.openEmailModal()" title="Mail">📧</button>
+            <button type="button" class="btn-icon bad" onclick="app.clearFilters()" title="Clear All Filters">🚫</button>
+            <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
+            <button class="btn-new-entry" onclick="app.openTaskModal()" title="New Entry">＋</button>
+
+            <div class="filter-panel" id="registerFilterPanel">
+                <div class="filter-panel-group">
+                    <label>Category</label>
+                    <div class="multi-select" id="ms-category"><div class="ms-header" onclick="app.toggleDropdown('ms-category')">Categories</div><div class="ms-options" id="filterCategoryOpts"></div></div>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Priority</label>
+                    <div class="multi-select" id="ms-priority"><div class="ms-header" onclick="app.toggleDropdown('ms-priority')">Priorities</div><div class="ms-options" id="filterPriorityOpts"></div></div>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Status</label>
+                    <div class="multi-select" id="ms-status"><div class="ms-header" onclick="app.toggleDropdown('ms-status')">Statuses</div><div class="ms-options" id="filterStatusOpts"></div></div>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Pending With</label>
+                    <select class="filter-select" id="filterPending" onchange="app.renderTable(); app.markFilterDot('register');"><option value="All">All People</option></select>
+                </div>
+                <div class="filter-panel-group">
+                    <label>Due Date</label>
+                    <select class="filter-select" id="filterDue" onchange="app.renderTable(); app.markFilterDot('register');">
+                        <option value="All">Any Due Date</option>
+                        <option value="Overdue">Overdue</option>
+                        <option value="Today">Today</option>
+                        <option value="DueByToday">Due by Today (incl. overdue)</option>
+                        <option value="Tomorrow">Tomorrow</option>
+                        <option value="Next7Days">Next 7 days</option>
+                        <option value="ThisWeek">This week</option>
+                        <option value="NextWeek">Next week</option>
+                        <option value="ThisMonth">This month</option>
+                        <option value="NoDue">No due date</option>
+                    </select>
                 </div>
             </div>
-            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:16px;">
-                <div style="background:var(--input-bg); padding:16px; border-radius:14px; border:1px solid var(--line);">
-                    <div style="font-size:0.75rem; font-weight:700; color:var(--label-2); text-transform:uppercase;">Open Tasks</div>
-                    <div style="font-size:1.8rem; font-weight:800; margin-top:6px;" id="entryCount">0</div>
+        </div>
+
+        <div class="sub-text">
+            <span id="entriesShownText">0 entries shown</span>
+        </div>
+
+        <p class="swipe-hint">Swipe a card right to complete, left to bin · tap to edit</p>
+        <div class="card-list" id="taskCardList"></div>
+
+        <div class="table-wrap">
+            <div class="table-container">
+                <table id="registerTable">
+                    <colgroup id="registerColgroup"><col><col><col><col><col><col><col><col></colgroup>
+                    <thead id="registerTableHead">
+                        <tr>
+                            <th onclick="app.sortTable('dateLogged')">Logged<span>↕</span></th>
+                            <th onclick="app.sortTable('description')">Task<span>↕</span></th>
+                            <th onclick="app.sortTable('category')">Category<span>↕</span></th>
+                            <th onclick="app.sortTable('priority')">Priority<span>↕</span></th>
+                            <th onclick="app.sortTable('status')">Status<span>↕</span></th>
+                            <th onclick="app.sortTable('pendingWith')">Pending With<span>↕</span></th>
+                            <th onclick="app.sortTable('dueDate')">Due Date<span>↕</span></th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- HOLIDAYS TAB -->
+    <div class="content-area" id="holidaysTab">
+        <div class="toolbar-row compact-toolbar" id="holidaysToolbar">
+            <div class="toolbar-search-wrap">
+                <input autocomplete="off" type="text" class="filter-input search-compact" id="searchHolidays" placeholder="Search holidays..." oninput="app.renderHolidays()" onfocus="app.expandSearch('holidays')">
+                <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('holidays')" title="Close search">✕</button>
+            </div>
+
+            <button type="button" class="btn-icon gear-btn" id="holidaysGearBtn" onclick="app.toggleFilterPanel('holidays')" title="Filter by calendar, alerts-on only">⚙️<span class="gear-dot" id="holidaysFilterDot"></span></button>
+            <button type="button" class="btn-icon bad" onclick="app.clearHolidayFilters()" title="Clear All Filters">🚫</button>
+            <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
+            <button class="btn-new-entry" onclick="app.openHolidayModal()" title="Add Holiday">＋</button>
+
+            <div class="filter-panel" id="holidaysFilterPanel">
+                <div class="filter-panel-group">
+                    <label>Holiday Calendar</label>
+                    <select class="filter-select" id="filterHolidayType" onchange="app.renderHolidays(); app.markFilterDot('holidays');">
+                        <option value="All">All Holiday Calendars</option>
+                        <option value="USD Holiday">USD Holiday</option>
+                        <option value="Indian Bank Holiday">Indian Bank Holiday</option>
+                    </select>
                 </div>
-                <div style="background:var(--input-bg); padding:16px; border-radius:14px; border:1px solid var(--line);">
-                    <div style="font-size:0.75rem; font-weight:700; color:var(--label-2); text-transform:uppercase;">Settled Today</div>
-                    <div style="font-size:1.8rem; font-weight:800; margin-top:6px; color:var(--green);" id="badgeCompleted">0</div>
-                </div>
-                <div style="background:var(--input-bg); padding:16px; border-radius:14px; border:1px solid var(--line);">
-                    <div style="font-size:0.75rem; font-weight:700; color:var(--label-2); text-transform:uppercase;">Bin Queue</div>
-                    <div style="font-size:1.8rem; font-weight:800; margin-top:6px; color:var(--red);" id="badgeBin">0</div>
+                <div class="filter-panel-group">
+                    <label style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:0; font-size:0.86rem; font-weight:600; color:var(--label);">
+                        <input type="checkbox" id="filterHolidayAlertOnly" style="width:16px; height:16px; accent-color:var(--accent);" onchange="app.renderHolidays(); app.markFilterDot('holidays');"> Alerts-on only
+                    </label>
                 </div>
             </div>
-        </section>
+        </div>
 
-        <!-- REGISTER TAB -->
-        <section class="content-area" id="registerTab">
-            <div class="action-bar">
-                <input type="text" class="search-input" id="searchInput" placeholder="Search tasks..." oninput="app.debouncedRender()">
-                <div>
-                    <button type="button" class="btn-action" onclick="app.openTaskModal()">+ New Task</button>
-                    <button type="button" class="btn-row" onclick="app.findDuplicates()">Deduplicate</button>
-                    <button type="button" class="btn-row" onclick="app.exportData('csv')">Export CSV</button>
+        <div id="holidayBlocksBanner" style="display:none; flex-direction:column; gap:8px; margin: 12px 4px 4px;"></div>
+
+        <p class="swipe-hint">Tap a holiday to edit · use the icons to edit or delete</p>
+        <div class="card-list" id="holidayCardList"></div>
+
+        <div class="table-wrap">
+            <div class="table-container">
+                <table id="holidaysTable">
+                    <colgroup id="holidaysColgroup"><col><col><col><col><col></colgroup>
+                    <thead id="holidaysTableHead">
+                        <tr>
+                            <th>Date</th>
+                            <th>Holiday For</th>
+                            <th>Next Working Day</th>
+                            <th>Holiday Calendar</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="holidaysTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- COMPLETED TAB -->
+    <div class="content-area" id="completedTab">
+        <div class="toolbar-row compact-toolbar" id="completedToolbar">
+            <div class="toolbar-search-wrap">
+                <input autocomplete="off" type="text" class="filter-input search-compact" id="searchCompleted" placeholder="Search completed..." oninput="app.debouncedRender()" onfocus="app.expandSearch('completed')">
+                <button type="button" class="search-cancel-btn" onclick="app.collapseSearch('completed')" title="Close search">✕</button>
+            </div>
+
+            <button type="button" class="btn-icon gear-btn" id="completedGearBtn" onclick="app.toggleFilterPanel('completed')" title="Filter by category">⚙️<span class="gear-dot" id="completedFilterDot"></span></button>
+            <button type="button" class="btn-icon" onclick="app.toggleSelectMode()" title="Select several entries">☑</button>
+            <button type="button" class="btn-icon" id="sortToggleCompleted" onclick="app.openSortMenu('Completed', this)" title="Sort">🔃</button>
+            <button type="button" class="btn-icon" onclick="app.fitColumns('completed')" title="Fit Columns">⤢</button>
+            <button type="button" class="btn-icon bad" onclick="app.clearFilters()" title="Clear All Filters">🚫</button>
+            <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
+
+            <div class="filter-panel" id="completedFilterPanel">
+                <div class="filter-panel-group">
+                    <label>Category</label>
+                    <div class="multi-select" id="ms-category-completed">
+                        <div class="ms-header" onclick="app.toggleDropdown('ms-category-completed')">All Categories</div>
+                        <div class="ms-options" id="filterCategoryCompletedOpts"></div>
+                    </div>
                 </div>
             </div>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Description / Purpose</th>
-                        <th>Category</th>
-                        <th>Priority</th>
-                        <th>Status</th>
-                        <th>Due Date</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="taskTableBody"></tbody>
-            </table>
-        </section>
+        </div>
 
-        <!-- COMPLETED TAB -->
-        <section class="content-area" id="completedTab">
-            <div class="action-bar">
-                <input type="text" class="search-input" id="searchCompleted" placeholder="Search completed..." oninput="app.debouncedRender()">
-                <button type="button" class="btn-row" onclick="app.resyncCompletedForReport()">Resync for Daily Report</button>
+        <div class="sub-text">
+            <span id="entriesCompletedText">0 completed entries</span>
+        </div>
+
+        <p class="swipe-hint">Tap a card to edit</p>
+        <div class="card-list" id="completedCardList"></div>
+
+        <div class="table-wrap">
+            <div class="table-container">
+                <table id="completedTable">
+                    <colgroup id="completedColgroup"><col><col><col><col><col></colgroup>
+                    <thead id="completedTableHead">
+                        <tr><th onclick="app.sortTable('dateLogged')">Logged<span>↕</span></th><th onclick="app.sortTable('description')">Task<span>↕</span></th><th onclick="app.sortTable('category')">Category<span>↕</span></th><th onclick="app.sortTable('completedDate')">Completed<span>↕</span></th><th>Actions</th></tr>
+                    </thead>
+                    <tbody id="completedTableBody"></tbody>
+                </table>
             </div>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Description / Purpose</th>
-                        <th>Category</th>
-                        <th>Settled Date</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="completedTableBody"></tbody>
-            </table>
-        </section>
+        </div>
+    </div>
 
-        <!-- HOLIDAYS TAB -->
-        <section class="content-area" id="holidaysTab">
-            <div class="action-bar">
-                <input type="text" class="search-input" id="searchHolidays" placeholder="Search calendar..." oninput="app.debouncedRender()">
-                <button type="button" class="btn-action" onclick="app.openHolidayModal()">+ Add Holiday</button>
+    <!-- BIN TAB -->
+    <div class="content-area" id="binTab">
+        <div class="toolbar-row single-line-toolbar" id="binToolbar">
+            <div class="toolbar-actions" style="margin-left: 0;">
+                <button class="btn-icon select-toggle" onclick="app.toggleSelectMode()" title="Select several entries">☑</button>
+                <button class="btn-icon view-toggle" onclick="app.toggleViewMode()" title="Switch between table and cards">▦</button>
+                <button class="btn-icon" id="sortToggleBin" onclick="app.openSortMenu('Bin', this)" title="Sort">🔃</button>
+                <button class="btn-icon" onclick="app.fitColumns('bin')" title="Fit Columns">⤢</button>
             </div>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Holiday Name</th>
-                        <th>Date</th>
-                        <th>Calendar Type</th>
-                        <th>Next Working Day</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="holidaysTableBody"></tbody>
-            </table>
-        </section>
+        </div>
 
-        <!-- CONFIG TAB -->
-        <section class="content-area" id="configTab">
-            <div style="background:var(--input-bg); padding:20px; border-radius:14px; border:1px solid var(--line); max-width:600px;">
-                <h3 style="margin-top:0;">Configuration & Security</h3>
-                <div style="margin-bottom:14px;">
-                    <label style="font-size:0.8rem; font-weight:700; display:block; margin-bottom:4px;">Session Security PIN</label>
-                    <button type="button" class="btn-row" id="pinCfgStatus" onclick="app.security.promptSetPin()">Set PIN</button>
-                    <button type="button" class="btn-row" id="cfgBioBtn" onclick="app.security.toggleBiometrics()">Biometrics</button>
+        <div class="sub-text">
+            <span id="entriesBinText">0 entries in bin</span>
+        </div>
+
+        <p class="swipe-hint">Use the buttons to restore or delete</p>
+        <div class="card-list" id="binCardList"></div>
+
+        <div class="table-wrap">
+            <div class="table-container">
+                <table id="binTable">
+                    <colgroup id="binColgroup"><col><col><col><col></colgroup>
+                    <thead id="binTableHead">
+                        <tr><th onclick="app.sortTable('dateDeleted')">Deleted<span>↕</span></th><th onclick="app.sortTable('description')">Task<span>↕</span></th><th onclick="app.sortTable('category')">Category<span>↕</span></th><th>Actions</th></tr>
+                    </thead>
+                    <tbody id="binTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- CONFIGURATION TAB -->
+    <div class="content-area" id="configTab">
+        <div class="sheet-stats">
+            <div class="sheet-stat"><b id="entryCount">0</b><span>Active</span></div>
+            <div class="sheet-stat"><b id="badgeCompleted">0</b><span>Done</span></div>
+            <div class="sheet-stat"><b id="badgeBin">0</b><span>In Bin</span></div>
+        </div>
+
+        <div class="cfg-shell" id="cfgShell">
+            <nav class="cfg-nav" id="cfgNav">
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgAppearance" onclick="app.showCfgPanel('cfgAppearance')"><span class="cfg-nav-ico">🎨</span><span class="cfg-nav-label">Appearance (iOS Glass Themes)</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgSecurity" onclick="app.showCfgPanel('cfgSecurity')"><span class="cfg-nav-ico">🔐</span><span class="cfg-nav-label">Security & PIN</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgActivityLog" onclick="app.showCfgPanel('cfgActivityLog')"><span class="cfg-nav-ico">📝</span><span class="cfg-nav-label">Activity Log</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgFixedTasks" onclick="app.showCfgPanel('cfgFixedTasks')"><span class="cfg-nav-ico">📌</span><span class="cfg-nav-label">Fixed Daily Activities</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgLeaveDays" onclick="app.showCfgPanel('cfgLeaveDays')"><span class="cfg-nav-ico">🌴</span><span class="cfg-nav-label">Leave Days</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgReportSamples" onclick="app.showCfgPanel('cfgReportSamples')"><span class="cfg-nav-ico">🧾</span><span class="cfg-nav-label">Report Style Samples</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgDailyReport" onclick="app.showCfgPanel('cfgDailyReport')"><span class="cfg-nav-ico">📊</span><span class="cfg-nav-label">Daily Activity Report</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgTextSize" onclick="app.showCfgPanel('cfgTextSize')"><span class="cfg-nav-ico">🔤</span><span class="cfg-nav-label">Text Size</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgCloudSync" onclick="app.showCfgPanel('cfgCloudSync')"><span class="cfg-nav-ico">☁️</span><span class="cfg-nav-label">Cloud Sync</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgDataBackup" onclick="app.showCfgPanel('cfgDataBackup')"><span class="cfg-nav-ico">💾</span><span class="cfg-nav-label">Data Backup</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgAlarmSound" onclick="app.showCfgPanel('cfgAlarmSound')"><span class="cfg-nav-ico">🔔</span><span class="cfg-nav-label">Alarm Sound</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgWalkReminder" onclick="app.showCfgPanel('cfgWalkReminder')"><span class="cfg-nav-ico">🚶</span><span class="cfg-nav-label">Walk Reminder</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgWaterReminder" onclick="app.showCfgPanel('cfgWaterReminder')"><span class="cfg-nav-ico">💧</span><span class="cfg-nav-label">Water Reminder</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgTimeSlots" onclick="app.showCfgPanel('cfgTimeSlots')"><span class="cfg-nav-ico">⏱️</span><span class="cfg-nav-label">Time Slots</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgToolsSettings" onclick="app.showCfgPanel('cfgToolsSettings')"><span class="cfg-nav-ico">⚙️</span><span class="cfg-nav-label">Settings & Tools</span><span class="cfg-nav-chevron">›</span></button>
+                <button type="button" class="cfg-nav-item" data-cfg-panel="cfgSystem" onclick="app.showCfgPanel('cfgSystem')"><span class="cfg-nav-ico">📱</span><span class="cfg-nav-label">System</span><span class="cfg-nav-chevron">›</span></button>
+            </nav>
+            <div class="cfg-panels" id="cfgPanels">
+                <button type="button" class="cfg-back-btn" id="cfgBackBtn" onclick="app.showCfgNav()">‹ Settings</button>
+                
+                <div class="cfg-section cfg-panel" id="cfgAppearance" data-cfg-panel="cfgAppearance">
+                    <div class="dash-title">Appearance (iOS Glass Themes)</div>
+                    <div class="theme-row">
+                        <button class="theme-btn" data-theme="pearl" onclick="app.applyTheme('pearl')">⚪ Pearl</button>
+                        <button class="theme-btn" data-theme="glass" onclick="app.applyTheme('glass')">🪩 Glassmorphism</button>
+                        <button class="theme-btn" data-theme="neuo" onclick="app.applyTheme('neuo')">🧼 Neumorphism</button>
+                        <button class="theme-btn" data-theme="clay" onclick="app.applyTheme('clay')">🏺 Claymorphism</button>
+                        <button class="theme-btn" data-theme="hero3d" onclick="app.applyTheme('hero3d')">🔮 3D Hero</button>
+                    </div>
                 </div>
-                <div style="margin-bottom:14px;">
-                    <label style="font-size:0.8rem; font-weight:700; display:block; margin-bottom:4px;">Daily Activity Report Date</label>
-                    <input type="date" id="dailyReportDate" style="height:34px; padding:4px 8px; border-radius:8px; border:1px solid var(--line);">
-                    <button type="button" class="btn-row" onclick="app.generateDailyReport()" style="margin-left:6px;">Generate Report</button>
-                </div>
-                <div id="dailyReportOutput" style="display:none; white-space:pre-wrap; background:var(--fill); padding:12px; border-radius:10px; font-family:monospace; font-size:0.8rem; margin-top:10px;"></div>
-                <div id="dailyReportActions" style="display:none; gap:8px; margin-top:8px;">
-                    <button type="button" class="btn-row ok" onclick="app.copyDailyReport()">Copy Report</button>
-                    <button type="button" class="btn-row" onclick="app.exportDailyReportExcel()">Export Excel</button>
-                </div>
-            </div>
-        </section>
 
-        <!-- BIN TAB -->
-        <section class="content-area" id="binTab">
-            <div class="action-bar">
-                <div style="font-size:0.9rem; color:var(--label-2);">Deleted entries remain here for 30 days before permanent purging.</div>
-            </div>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Description / Purpose</th>
-                        <th>Category</th>
-                        <th>Deleted Date</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="binTableBody"></tbody>
-            </table>
-        </section>
-    </main>
+                <div class="cfg-section cfg-panel" id="cfgSecurity" data-cfg-panel="cfgSecurity">
+                    <div class="dash-title">Security & Privacy</div>
+                    <p class="cfg-hint">Protect your treasury session. Set a PIN or enable biometrics to lock the screen.</p>
+                    <div class="sheet-grid" style="gap:10px;">
+                        <button class="sheet-item" id="pinCfgStatus" onclick="app.security.promptSetPin()"><span class="ico">🔢</span>Set PIN</button>
+                        <button class="sheet-item" id="cfgBioBtn" onclick="app.security.toggleBiometrics()"><span class="ico">👆</span>Biometrics</button>
+                        <button class="sheet-item" onclick="app.security.lock()"><span class="ico">🔒</span>Lock Now</button>
+                    </div>
+                </div>
 
-    <div id="toastContainer"></div>
+                <div class="cfg-section cfg-panel" id="cfgActivityLog" data-cfg-panel="cfgActivityLog">
+                    <div class="dash-title">Activity Log</div>
+                    <p class="cfg-hint">Your Task Activity Log fills itself in automatically — every task you create, edit, complete, reopen, bin, or restore is logged with its category, status, notes and Key Points, with no typing needed here. This box below is only for something worth reporting that never became a task at all (a call, a meeting, anything off-tracker).</p>
+                    <div class="sheet-grid" style="gap:10px;">
+                        <input autocomplete="off" type="text" id="generalLogActivity" placeholder="Something NOT already a task (e.g. Team standup call)" style="grid-column: 1 / -1;">
+                        <input autocomplete="off" type="text" id="generalLogDetails" placeholder="Details (optional)" style="grid-column: 1 / -1;">
+                        <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.submitGeneralLog()">Log this activity</button>
+                    </div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgFixedTasks" data-cfg-panel="cfgFixedTasks">
+                    <div class="dash-title">Fixed Daily Activities</div>
+                    <p class="cfg-hint">Standing tasks you do every working day (e.g. "Daily NOSTRO account reconciliation"). Describe once — every daily report includes it automatically from then on, with no need to log it again. Uncheck to pause one without losing it.</p>
+                    <div class="sheet-grid" style="gap:10px;">
+                        <input autocomplete="off" type="text" id="fixedTaskText" placeholder="e.g. Daily NOSTRO account reconciliation" style="grid-column: 1 / -1;">
+                        <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.saveFixedTask()">Add fixed activity</button>
+                    </div>
+                    <div id="fixedTasksList" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgLeaveDays" data-cfg-panel="cfgLeaveDays">
+                    <div class="dash-title">Leave Days</div>
+                    <p class="cfg-hint">Mark a day where there's genuinely nothing to do on the tracker. Leave days count as non-working for the "due on a holiday/Sunday" alert choice, and marking one is never logged as activity, so it won't show up in the daily report.</p>
+                    <button class="btn-modal primary" id="leaveTodayBtn" onclick="app.toggleTodayLeave()" style="margin-bottom:14px;">Mark Today as Leave</button>
+                    <div id="leaveDaysList" style="display:flex; flex-direction:column; gap:8px;"></div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgReportSamples" data-cfg-panel="cfgReportSamples">
+                    <div class="dash-title">Report Style Samples</div>
+                    <p class="cfg-hint">Paste in a report you've already written by hand. The AI will match its style, structure, and level of detail on every future report — the more you add, the closer the match. Only your 3 most recent saved samples are used per report.</p>
+                    <div class="sheet-grid" style="gap:10px;">
+                        <textarea id="reportSampleText" placeholder="Paste a past daily report here..." style="grid-column: 1 / -1; min-height:100px;"></textarea>
+                        <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.saveReportSample()">Save as style sample</button>
+                    </div>
+                    <div id="reportSamplesList" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgDailyReport" data-cfg-panel="cfgDailyReport">
+                    <div class="dash-title">Daily Activity Report</div>
+                    <p class="cfg-hint">Summarizes today's Task Activity Log (with full task detail) + General Activity Log + any saved style samples above, into a report written by Gemini.</p>
+                    <div class="sheet-grid" style="gap:10px;">
+                        <input autocomplete="off" type="date" id="dailyReportDate" style="grid-column: 1 / -1;">
+                        <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.resyncCompletedForReport()" title="Re-sends every Completed entry for this date to the report log — safe to run any time, in case any completion didn't get logged">Resync completed tasks for this date</button>
+                        <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.generateDailyReport()">Generate report</button>
+                    </div>
+                    <div id="dailyReportOutput" style="display:none; margin-top:12px; padding:14px; border-radius:14px; background:var(--input-bg); border:1px solid var(--line); white-space:pre-wrap; font-size:0.86rem; line-height:1.6; color:var(--label);"></div>
+                    <div class="sheet-grid" id="dailyReportActions" style="display:none; margin-top:10px; gap:10px;">
+                        <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.copyDailyReport()">Copy report text</button>
+                        <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.exportDailyReportExcel()">Download as Excel</button>
+                    </div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgTextSize" data-cfg-panel="cfgTextSize">
+                    <div class="dash-title">Text Size</div>
+                    <p class="cfg-hint">Default text size for the whole app. Tap to switch — takes effect immediately.</p>
+                    <div class="theme-row">
+                        <button class="theme-btn textsize-btn" data-size="small" onclick="app.applyTextSize('small')">A Small</button>
+                        <button class="theme-btn textsize-btn" data-size="default" onclick="app.applyTextSize('default')">A Default</button>
+                        <button class="theme-btn textsize-btn" data-size="large" onclick="app.applyTextSize('large')">A Large</button>
+                        <button class="theme-btn textsize-btn" data-size="xlarge" onclick="app.applyTextSize('xlarge')">A X-Large</button>
+                    </div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgCloudSync" data-cfg-panel="cfgCloudSync">
+                    <div class="dash-title">Cloud Sync</div>
+                    <div class="sheet-grid">
+                        <button class="sheet-item" onclick="app.syncCycle(true)"><span class="ico">↻</span>Sync now</button>
+                        <button class="sheet-item" onclick="app.pullTasksFromCloud(true)"><span class="ico">☁️</span>Pull changes</button>
+                        <button class="sheet-item" onclick="app.restoreFromCloud()"><span class="ico">⤓</span>Restore</button>
+                        <button class="sheet-item" onclick="app.openSyncSetup()"><span class="ico">🔗</span>Connection</button>
+                    </div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgDataBackup" data-cfg-panel="cfgDataBackup">
+                    <div class="dash-title">Data Backup</div>
+                    <div class="sheet-grid">
+                        <button class="sheet-item" onclick="app.exportData('csv')"><span class="ico">💾</span>Export CSV</button>
+                        <button class="sheet-item" onclick="document.getElementById('importCSVFile').click()"><span class="ico">📤</span>Import CSV</button>
+                        <button class="sheet-item" onclick="app.findDuplicates()"><span class="ico">⧉</span>Duplicates</button>
+                    </div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgAlarmSound" data-cfg-panel="cfgAlarmSound">
+                    <div class="dash-title">Alarm Sound</div>
+                    <p class="cfg-hint">Plays when a task goes past its deadline. Tap a name to use it, or ▶ to preview.</p>
+                    <div class="sound-list" id="alarmSoundList"></div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgWalkReminder" data-cfg-panel="cfgWalkReminder">
+                    <div class="dash-title">Walk Reminder</div>
+                    <p class="cfg-hint">Nudges you to leave the desk while you work. It alerts at each slot in the window below, with the same sound as a task alert.</p>
+                    <div class="walk-row">
+                        <button class="sheet-item walk-toggle" id="walkToggle" onclick="app.toggleNudge('walk')"><span class="ico">🚶</span><span id="walkToggleLabel">Reminder on</span></button>
+                        <label class="walk-field">Start<input autocomplete="off" type="time" id="walkStart" onchange="app.saveNudgeCfg('walk', { start: this.value })"></label>
+                        <label class="walk-field">End<input autocomplete="off" type="time" id="walkEnd" onchange="app.saveNudgeCfg('walk', { end: this.value })"></label>
+                        <label class="walk-field">Every (min)<input autocomplete="off" type="number" min="10" step="5" id="walkEvery" onchange="app.saveNudgeCfg('walk', { every: Number(this.value) })"></label>
+                        <button class="sheet-item" onclick="app.triggerNudge('walk')"><span class="ico">🔔</span>Preview</button>
+                    </div>
+                    <p class="cfg-hint" id="walkNextHint" style="margin: 12px 0 0;"></p>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgWaterReminder" data-cfg-panel="cfgWaterReminder">
+                    <div class="dash-title">Water Reminder</div>
+                    <p class="cfg-hint">Nudges you to drink water through the day. Same alert style as the walk reminder, on its own schedule.</p>
+                    <div class="walk-row">
+                        <button class="sheet-item walk-toggle" id="waterToggle" onclick="app.toggleNudge('water')"><span class="ico">💧</span><span id="waterToggleLabel">Reminder on</span></button>
+                        <label class="walk-field">Start<input autocomplete="off" type="time" id="waterStart" onchange="app.saveNudgeCfg('water', { start: this.value })"></label>
+                        <label class="walk-field">End<input autocomplete="off" type="time" id="waterEnd" onchange="app.saveNudgeCfg('water', { end: this.value })"></label>
+                        <label class="walk-field">Every (min)<input autocomplete="off" type="number" min="10" step="5" id="waterEvery" onchange="app.saveNudgeCfg('water', { every: Number(this.value) })"></label>
+                        <button class="sheet-item" onclick="app.triggerNudge('water')"><span class="ico">🔔</span>Preview</button>
+                    </div>
+                    <p class="cfg-hint" id="waterNextHint" style="margin: 12px 0 0;"></p>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgTimeSlots" data-cfg-panel="cfgTimeSlots">
+                    <div class="dash-title">Time Slots</div>
+                    <p class="cfg-hint">Keeps two tasks off the same time. A scheduled task holds the clock for the minutes below, and anything booked inside that window is turned away with the next free time.</p>
+                    <div class="walk-row">
+                        <button class="sheet-item walk-toggle" id="slotToggle" onclick="app.toggleSlots()"><span class="ico">⏱️</span><span id="slotToggleLabel">Holding on</span></button>
+                        <label class="walk-field">Hold for (min)<input autocomplete="off" type="number" min="1" max="240" step="5" id="slotMinutes" onchange="app.saveSlotCfg({ minutes: Number(this.value) })"></label>
+                    </div>
+                    <p class="cfg-hint" id="slotHint" style="margin: 12px 0 0;"></p>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgToolsSettings" data-cfg-panel="cfgToolsSettings">
+                    <div class="dash-title">Settings & Tools</div>
+                    <div class="sheet-grid">
+                        <button class="sheet-item" onclick="app.openListManager('categories')"><span class="ico">⚙️</span>Lists</button>
+                        <button class="sheet-item" onclick="app.openEmailModal()"><span class="ico">📥</span>Fetch Mail</button>
+                        <button class="sheet-item" onclick="app.testAlarmSound()"><span class="ico">🔔</span>Test Alarm</button>
+                    </div>
+                </div>
+
+                <div class="cfg-section cfg-panel" id="cfgSystem" data-cfg-panel="cfgSystem">
+                    <div class="dash-title">System</div>
+                    <div class="sheet-grid">
+                        <button class="sheet-item" id="installBtn" style="display:none;" onclick="pwa.install()"><span class="ico">⬇️</span>Install App</button>
+                        <button class="sheet-item" id="notifyBtn" onclick="app.enableNotifications()"><span class="ico">🔔</span>Enable Alerts</button>
+                        <button class="sheet-item" onclick="pwa.checkUpdate()"><span class="ico">🔄</span>Check Update</button>
+                        <button class="sheet-item" onclick="pwa.clearCache()"><span class="ico">🧹</span>Clear Cache</button>
+                    </div>
+                    <p class="cfg-hint" id="swVersion" style="margin: 14px 0 0;"></p>
+                    <p class="cfg-hint" id="installHint" style="margin: 6px 0 0;"></p>
+                </div>
+
+            </div>
+        </div>
+    </div>
 
     <!-- TASK MODAL -->
-    <div class="modal" id="taskModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-        <div class="modal-content">
-            <div class="modal-header" style="margin-bottom: 10px; padding-bottom: 6px;">
-                <h2 id="modalTitle" style="font-size: 1.15rem; margin: 0;">New Entry</h2>
-                <button type="button" class="modal-close" onclick="app.closeTaskModal()" aria-label="Close modal">✕</button>
+    <div class="modal" id="taskModal">
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h2 id="modalTitle">New Entry</h2>
+                <button class="modal-close" onclick="app.closeTaskModal()">✕</button>
             </div>
-
-            <form id="taskForm" onsubmit="app.saveTask(event)">
-                <div class="form-grid-2">
-                    <div class="form-group">
-                        <label for="taskDescription">Purpose / Description <span style="color:var(--red);">*</span></label>
-                        <div class="input-with-copy">
-                            <input type="text" id="taskDescription" placeholder="e.g. Vendor payment" required autocomplete="off">
-                            <button type="button" class="btn-field-copy" onclick="app.copyFieldValue('taskDescription', this)" title="Copy Purpose">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                                </svg>
-                            </button>
-                        </div>
+            <form id="taskForm" autocomplete="off" onsubmit="app.saveTask(event)">
+                <div class="form-group">
+                    <label>Task Description / Purpose <span style="color:var(--red);">*</span></label>
+                    <div class="input-with-copy">
+                        <input autocomplete="off" type="text" id="taskDescription" required placeholder="e.g. Follow up on LC opening">
+                        <button type="button" class="btn-field-copy" onclick="app.copyFieldValue('taskDescription', this)" title="Copy Purpose">
+                            <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
                     </div>
-
+                </div>
+                <div class="form-row-4">
                     <div class="form-group">
-                        <label for="taskMailChain">Mail Chain / Reference</label>
-                        <div class="input-with-copy">
-                            <input type="text" id="taskMailChain" placeholder="e.g. RE: LC Payment SBI" autocomplete="off">
-                            <button type="button" class="btn-field-copy" onclick="app.copyFieldValue('taskMailChain', this)" title="Copy Mail Chain">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                                </svg>
-                            </button>
-                        </div>
+                        <label>Category <a href="#" class="edit-options-btn" onclick="app.openListManager('categories'); return false;">Edit</a></label>
+                        <select id="taskCategory" onchange="app.updateConditionalFields()"><option value="">Select category</option></select>
                     </div>
-
                     <div class="form-group">
-                        <label for="taskCategory">Category</label>
-                        <select id="taskCategory" onchange="app.updateConditionalFields()"></select>
-                    </div>
-
-                    <div class="form-group" id="subCategoryField" style="display:none;">
-                        <label for="taskSubCategory">Sub-Category</label>
-                        <select id="taskSubCategory" onchange="app.renderSubCategoryFields()"></select>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="taskPriority">Priority</label>
+                        <label>Priority <a href="#" class="edit-options-btn" onclick="app.openListManager('priorities'); return false;">Edit</a></label>
                         <select id="taskPriority"></select>
                     </div>
-
                     <div class="form-group">
-                        <label for="taskStatus">Status</label>
+                        <label>Status <a href="#" class="edit-options-btn" onclick="app.openListManager('statuses'); return false;">Edit</a></label>
                         <select id="taskStatus" onchange="app.updateConditionalFields()"></select>
                     </div>
-
                     <div class="form-group">
-                        <label for="taskDueDate">Due Date</label>
-                        <input type="date" id="taskDueDate" onchange="app.checkSlotAvailability()">
+                        <label>Pending With <a href="#" class="edit-options-btn" onclick="app.openListManager('pendingWith'); return false;">Edit</a></label>
+                        <select id="taskPendingWith"><option value="">Select person</option></select>
                     </div>
-
-                    <div class="form-group">
-                        <label for="taskDueTime">Due Time</label>
-                        <input type="time" id="taskDueTime" onchange="app.checkSlotAvailability()">
+                </div>
+                <div class="form-group" id="subCategoryField" style="display:none;">
+                    <label>Sub Category <a href="#" class="edit-options-btn" onclick="app.openSubCategoryRules(); return false;">Manage rules</a></label>
+                    <select id="taskSubCategory" onchange="app.renderSubCategoryFields()"><option value="">Select Sub Category</option></select>
+                    <div id="subCategoryRuleFields" style="margin-top:10px; display:flex; flex-direction:column; gap:10px;"></div>
+                </div>
+                <div id="importInProgressFields" style="display:none;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Payment %</label>
+                            <input autocomplete="off" type="number" id="pdPaymentPercent" min="0" max="100" placeholder="e.g. 30">
+                        </div>
+                        <div class="form-group">
+                            <label>Payment Type</label>
+                            <select id="pdPaymentType">
+                                <option value="">Select</option>
+                                <option value="Advance">Advance</option>
+                                <option value="Balance">Balance</option>
+                                <option value="Remaining Balance">Remaining Balance</option>
+                            </select>
+                        </div>
                     </div>
-
                     <div class="form-group">
-                        <label for="taskDeadlineDate">Strict Deadline Date</label>
-                        <input type="date" id="taskDeadlineDate">
+                        <label>Payment Against</label>
+                        <select id="pdPaymentAgainst">
+                            <option value="">Select</option>
+                            <option value="Before Dispatch">Before Dispatch</option>
+                            <option value="Before Production">Before Production</option>
+                            <option value="Against BOE">Against BOE</option>
+                            <option value="Against BL">Against BL</option>
+                            <option value="Against CI">Against CI</option>
+                        </select>
                     </div>
-
+                </div>
+                <div class="form-row">
                     <div class="form-group">
-                        <label for="taskDeadlineTime">Strict Deadline Time</label>
-                        <input type="time" id="taskDeadlineTime">
+                        <label style="color:var(--accent);">Due Date & Time</label>
+                        <div style="display:flex; gap:12px;">
+                            <input autocomplete="off" type="date" id="taskDueDate" onchange="app.checkDueHoliday(); app.checkSlotAvailability()">
+                            <input autocomplete="off" type="time" id="taskDueTime" onchange="app.checkSlotAvailability()">
+                        </div>
+                        <div class="due-hint" id="dueHolidayHint"></div>
+                        <div class="due-hint" id="dueSlotHint"></div>
                     </div>
-
                     <div class="form-group">
-                        <label for="taskPendingWith">Pending With</label>
-                        <select id="taskPendingWith"></select>
+                        <label>Deadline <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--label-2);">(optional — alerted once crossed)</span></label>
+                        <div style="display:flex; gap:12px;">
+                            <input autocomplete="off" type="date" id="taskDeadlineDate">
+                            <input autocomplete="off" type="time" id="taskDeadlineTime">
+                        </div>
                     </div>
-
+                </div>
+                <div class="form-row">
                     <div class="form-group">
-                        <label for="taskRecurrence">Recurrence</label>
+                        <label>Mail Chain / Reference</label>
+                        <div class="input-with-copy">
+                            <input autocomplete="off" type="text" id="taskMailChain" placeholder="e.g. Ticket #12345" oninput="app.updateNarrationPreview()">
+                            <button type="button" class="btn-field-copy" onclick="app.copyFieldValue('taskMailChain', this)" title="Copy Mail Chain">
+                                <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Recurrence</label>
                         <select id="taskRecurrence">
-                            <option value="None">None</option>
+                            <option value="None">Doesn't repeat</option>
                             <option value="Daily">Daily</option>
                             <option value="Weekly">Weekly</option>
                             <option value="Monthly">Monthly</option>
-                            <option value="Yearly">Yearly</option>
                         </select>
                     </div>
-
-                    <div class="form-group col-span-full" id="importInProgressFields" style="display:none;">
-                        <div style="background:var(--fill); padding:8px 12px; border-radius:10px; border:1px solid var(--line); display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
-                            <div>
-                                <label style="font-size:0.68rem;">Payment %</label>
-                                <input type="text" id="pdPaymentPercent" placeholder="100%">
-                            </div>
-                            <div>
-                                <label style="font-size:0.68rem;">Payment Type</label>
-                                <select id="pdPaymentType">
-                                    <option value="Advance">Advance</option>
-                                    <option value="LC">LC</option>
-                                    <option value="DA">DA</option>
-                                    <option value="DP">DP</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label style="font-size:0.68rem;">Payment Against</label>
-                                <select id="pdPaymentAgainst">
-                                    <option value="PI">PI</option>
-                                    <option value="Commercial Invoice">CI</option>
-                                    <option value="BL">BL</option>
-                                </select>
-                            </div>
+                </div>
+                <div class="form-group" id="tallyNarrationBox" style="display:none;">
+                    <label>Tally Narration <a href="#" class="edit-options-btn" onclick="app.openNarrationRules(); return false;">Manage types</a></label>
+                    <select id="taskNarrationType" onchange="app.onNarrationTypeChange()"><option value="">— Not a payment / skip —</option></select>
+                    <div id="narrationFieldsWrap" style="display:none; margin-top:10px;">
+                        <div class="form-group" id="narrationPercentGroup" style="display:none;">
+                            <label>%</label>
+                            <input autocomplete="off" type="number" min="0" max="100" id="narrationPercent" placeholder="e.g. 100" oninput="app.updateNarrationPreview()">
                         </div>
-                    </div>
-
-                    <div class="form-group col-span-full" id="subCategoryFieldsContainer">
-                        <div id="subCategoryRuleFields"></div>
-                    </div>
-
-                    <div class="form-group col-span-full" id="tallyNarrationBox" style="display:none;">
-                        <div style="background:var(--fill); padding:8px 12px; border-radius:10px; border:1px solid var(--line); display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                            <div>
-                                <label style="font-size:0.68rem;">Narration Type</label>
-                                <select id="taskNarrationType" onchange="app.renderNarrationFields()"></select>
-                            </div>
-                            <div>
-                                <label style="font-size:0.68rem;" id="narrationDocLabel">Doc No / Ref</label>
-                                <input type="text" id="narrationDocNo" oninput="app.updateNarrationPreview()">
-                            </div>
-                            <div class="col-span-full" id="narrationDynamicInputs"></div>
-                            <div class="col-span-full">
-                                <label style="font-size:0.68rem;">Preview</label>
-                                <input type="text" id="narrationPreview" readonly style="background:var(--fill-2); font-family:monospace; font-size:0.75rem;">
-                            </div>
+                        <div class="form-group">
+                            <label id="narrationDocLabel">Document No</label>
+                            <input autocomplete="off" type="text" id="narrationDocNo" placeholder="e.g. INPO/PP/26-27/0156" oninput="app.updateNarrationPreview()">
                         </div>
-                    </div>
-
-                    <div class="form-group col-span-full" id="keyPointsSection">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                            <label style="margin-bottom:0;">Key Points / Audit References</label>
-                            <button type="button" class="btn-row" onclick="app.addKeyPointRow()" style="font-size:0.7rem; padding:2px 8px; height:24px; cursor:pointer;">+ Add Field</button>
+                        <div id="narrationExtraFieldsWrap"></div>
+                        <div class="form-group">
+                            <label>Purpose / Note <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+                            <input autocomplete="off" type="text" id="narrationPurpose" placeholder="e.g. After TDS of 10%" oninput="app.updateNarrationPreview()">
                         </div>
-                        <div id="taskKeyPoints" style="display:flex; flex-direction:column; gap:6px;"></div>
-                    </div>
-
-                    <div class="form-group col-span-full">
-                        <label for="taskNotes">Notes & Remarks</label>
-                        <textarea id="taskNotes" rows="2" placeholder="Additional transaction details or UTR references..."></textarea>
+                        <div class="form-group" style="margin-bottom:0;">
+                            <label>Generated Narration</label>
+                            <textarea id="narrationPreview" readonly style="min-height:70px;"></textarea>
+                            <button type="button" class="btn-modal secondary" style="margin-top:8px;" onclick="app.copyToClipboard(document.getElementById('narrationPreview').value)">Copy Narration</button>
+                        </div>
                     </div>
                 </div>
-
-                <div class="modal-buttons" style="margin-top: 14px; padding-top: 8px;">
-                    <button type="button" class="btn-modal secondary" onclick="app.closeTaskModal()" style="height: 36px; font-size: 0.82rem;">Cancel</button>
-                    <button type="submit" class="btn-modal primary" style="height: 36px; font-size: 0.82rem;">Save Entry</button>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <textarea autocomplete="off" id="taskNotes" placeholder="Additional notes or context..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex; align-items:center; justify-content:space-between;">
+                        <span>Key Points <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--label-2);">(feeds the daily AI report)</span></span>
+                        <button type="button" class="fp-action-btn" style="flex:0 0 auto; padding:4px 10px;" onclick="app.addKeyPointRow()">+ Add</button>
+                    </label>
+                    <div id="taskKeyPoints"></div>
+                </div>
+                <div class="modal-buttons">
+                    <button type="button" class="btn-modal secondary" id="viewOriginalEmailBtn" style="display:none;" onclick="app.openStoredEmail()">Open Mail</button>
+                    <button type="submit" class="btn-modal primary">Save Entry</button>
+                    <button type="button" class="btn-modal secondary" onclick="app.closeTaskModal()">Cancel</button>
+                    <button type="button" class="btn-modal danger" id="deleteTaskBtn" style="display:none;" onclick="app.binCurrentTask()">Bin</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- CALENDAR MANAGER MODAL -->
+    <div class="modal" id="calendarManagerModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>Manage Holiday Calendars</h2>
+                <button class="modal-close" onclick="app.closeCalendarManager()">✕</button>
+            </div>
+            <div id="calendarManagerList" style="display:flex; flex-direction:column; gap:8px; max-height:240px; overflow-y:auto; margin-bottom:14px;"></div>
+            <div class="form-group">
+                <label>New Calendar Name</label>
+                <input autocomplete="off" type="text" id="newCalendarName" placeholder="e.g. UK Bank Holiday">
+            </div>
+            <div class="modal-buttons">
+                <button type="button" class="btn-modal primary" onclick="app.addCustomCalendar()">Add Calendar</button>
+                <button type="button" class="btn-modal secondary" onclick="app.closeCalendarManager()">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SUB CATEGORY RULES MODAL -->
+    <div class="modal" id="subCategoryRulesModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>Sub Category Rules</h2>
+                <button class="modal-close" onclick="app.closeSubCategoryRules()">✕</button>
+            </div>
+            <p class="cfg-hint" style="padding:0 2px;">Each sub category can ask for its own extra fields when picked on a task — e.g. "PO Advance Payment" asks for PO No and Type of Advance. Set that up here, once per sub category.</p>
+            <div id="subCategoryRulesList" style="display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; margin: 10px 0;"></div>
+            <div class="form-group">
+                <label>Sub Category Name</label>
+                <input autocomplete="off" type="text" id="scrName" placeholder="e.g. PO Advance Payment">
+            </div>
+            <div id="scrFieldRows" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;"></div>
+            <button type="button" class="fp-action-btn" onclick="app.addScrFieldRow()">+ Add Field</button>
+            <div class="modal-buttons" style="margin-top:14px;">
+                <button type="button" class="btn-modal primary" onclick="app.saveSubCategoryRule()">Save Sub Category</button>
+                <button type="button" class="btn-modal secondary" onclick="app.resetScrForm()">Clear Form</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TALLY NARRATION TYPES MODAL -->
+    <div class="modal" id="narrationRulesModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>Tally Narration Types</h2>
+                <button class="modal-close" onclick="app.closeNarrationRules()">✕</button>
+            </div>
+            <p class="cfg-hint" style="padding:0 2px;">Each type builds one sentence: "Being " + an optional % + a fixed phrase + the document number you enter at completion + any extra fields below + an optional note + this entry's Mail Chain. Mark one extra field "Lead" to put it first instead — "&lt;value&gt; : ..." — and drop the Mail Chain (e.g. Vendor Name on a COD charge).</p>
+            <div id="narrationRulesList" style="display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; margin: 10px 0;"></div>
+            <div class="form-group">
+                <label>Narration Type Name</label>
+                <input autocomplete="off" type="text" id="nrName" placeholder="e.g. Advance against Purchase Order">
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; color:var(--label-2); margin-bottom:14px; cursor:pointer;">
+                <input type="checkbox" id="nrHasPercent" style="width:auto;"> Has a % field (e.g. advance payments)
+            </label>
+            <div class="form-group">
+                <label>Fixed Phrase <span style="font-weight:400; text-transform:none; letter-spacing:0;">(ends right where the document number goes)</span></label>
+                <input autocomplete="off" type="text" id="nrPhrase" placeholder="e.g. Advance amount paid against Po No: ">
+            </div>
+            <div class="form-group">
+                <label>Document Field Label</label>
+                <input autocomplete="off" type="text" id="nrDocLabel" placeholder="e.g. PO No">
+            </div>
+            <div class="form-group">
+                <label>Extra Fields <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — whatever else this type needs to ask for)</span></label>
+                <div id="nrFieldRows" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;"></div>
+                <button type="button" class="fp-action-btn" onclick="app.addNrFieldRow()">+ Add Field</button>
+            </div>
+            <div class="modal-buttons" style="margin-top:14px;">
+                <button type="button" class="btn-modal primary" onclick="app.saveNarrationRule()">Save Narration Type</button>
+                <button type="button" class="btn-modal secondary" onclick="app.resetNrForm()">Clear Form</button>
+            </div>
         </div>
     </div>
 
     <!-- HOLIDAY MODAL -->
-    <div class="modal" id="holidayModal" role="dialog" aria-modal="true" aria-labelledby="holidayModalTitle">
-        <div class="modal-content" style="max-width:440px; padding:18px 22px;">
-            <div class="modal-header" style="margin-bottom:12px;">
-                <h2 id="holidayModalTitle" style="font-size:1.1rem; margin:0;">Holiday Entry</h2>
-                <button type="button" class="modal-close" onclick="app.closeHolidayModal()">✕</button>
+    <div class="modal" id="holidayModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2 id="holidayModalTitle">Add Holiday</h2>
+                <button class="modal-close" onclick="app.closeHolidayModal()">✕</button>
             </div>
-            <form id="holidayForm" onsubmit="app.saveHoliday(event)">
-                <div style="display:flex; flex-direction:column; gap:10px;">
-                    <div>
-                        <label style="font-size:0.75rem; font-weight:700;">Holiday Name</label>
-                        <input type="text" id="holidayName" required style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
-                    </div>
-                    <div>
-                        <label style="font-size:0.75rem; font-weight:700;">Date</label>
-                        <input type="date" id="holidayDate" required style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
-                    </div>
-                    <div>
-                        <label style="font-size:0.75rem; font-weight:700;">Calendar Type</label>
-                        <select id="holidayType" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;"></select>
-                    </div>
-                    <div>
-                        <label style="font-size:0.75rem; font-weight:700;">Next Working Day</label>
-                        <input type="date" id="holidayNextWorking" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
-                    </div>
+            <form id="holidayForm" autocomplete="off" onsubmit="app.saveHoliday(event)">
+                <div class="form-group">
+                    <label>Date</label>
+                    <input autocomplete="off" type="date" id="holidayDate" required onchange="app.holidayDateChanged()">
                 </div>
-                <div class="modal-buttons" style="margin-top:14px;">
-                    <button type="button" class="btn-modal secondary" onclick="app.closeHolidayModal()">Cancel</button>
+                <div class="form-group">
+                    <label>Holiday Name</label>
+                    <input autocomplete="off" type="text" id="holidayName" required placeholder="e.g. Republic Day">
+                </div>
+                <div class="form-group">
+                    <label>Holiday Calendar <a href="#" class="edit-options-btn" onclick="app.openCalendarManager(); return false;">Manage</a></label>
+                    <select id="holidayType"></select>
+                </div>
+                <div class="form-group">
+                    <label>Next Working Day</label>
+                    <input autocomplete="off" type="date" id="holidayNextWorking" placeholder="Auto-suggested">
+                </div>
+                <div class="form-group">
+                    <label style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:0; font-size:0.9rem; font-weight:600; color:var(--label);">
+                        <input type="checkbox" id="holidayAlertOn" style="width:18px; height:18px; accent-color:var(--accent);" checked> Alert me for this holiday
+                    </label>
+                </div>
+                <div class="modal-buttons">
                     <button type="submit" class="btn-modal primary">Save Holiday</button>
+                    <button type="button" class="btn-modal secondary" onclick="app.closeHolidayModal()">Cancel</button>
+                    <button type="button" class="btn-modal danger" id="deleteHolidayBtn" style="display:none;" onclick="app.deleteCurrentHoliday()">Delete</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- CLOUD SYNC SETUP MODAL -->
-    <div class="modal" id="syncSetupModal" role="dialog" aria-modal="true">
-        <div class="modal-content" style="max-width:480px; padding:18px 22px;">
-            <div class="modal-header" style="margin-bottom:12px;">
-                <h2 style="font-size:1.1rem; margin:0;">Cloud Sync Configuration</h2>
-                <button type="button" class="modal-close" onclick="document.getElementById('syncSetupModal').classList.remove('open')">✕</button>
+    <!-- MAIL MODAL -->
+    <div class="modal" id="emailListModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Unread Mails</h2>
+                <button class="modal-close" onclick="document.getElementById('emailListModal').classList.remove('open')">✕</button>
             </div>
-            <div style="display:flex; flex-direction:column; gap:10px;">
-                <div>
-                    <label style="font-size:0.75rem; font-weight:700;">Apps Script Web App URL</label>
-                    <input type="text" id="syncUrlInput" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
-                </div>
-                <div>
-                    <label style="font-size:0.75rem; font-weight:700;">Authorization Token</label>
-                    <input type="text" id="authTokenInput" placeholder="PureEnergySecure2026" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
-                </div>
-                <div>
-                    <label style="font-size:0.75rem; font-weight:700;">Profile Name</label>
-                    <input type="text" id="profileInput" placeholder="default" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
-                </div>
+            <div style="margin-bottom: 16px;">
+                <input autocomplete="off" type="text" id="emailSearchInput" class="filter-input" placeholder="Search subject or sender…" oninput="app.renderEmailList()" style="width:100%;">
             </div>
-            <div class="modal-buttons" style="margin-top:14px;">
-                <button type="button" class="btn-modal secondary" onclick="document.getElementById('syncSetupModal').classList.remove('open')">Cancel</button>
-                <button type="button" class="btn-modal primary" onclick="app.saveSyncUrlModal()">Save Settings</button>
+            <div id="emailListContainer" style="max-height: 50vh; overflow-y: auto;">
+                <div class="empty-state"><strong>No Data</strong><span>Fetch to load unread mail.</span></div>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn-modal primary" onclick="app.fetchEmails()" id="btnFetchMails">Fetch Unread Mail</button>
             </div>
         </div>
     </div>
+
+    <!-- LIST MANAGER MODAL -->
+    <div class="modal" id="listManagerModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2 id="listManagerTitle">Manage List</h2>
+                <button class="modal-close" onclick="app.closeListManager()">✕</button>
+            </div>
+            <div class="form-group">
+                <label>List Selection</label>
+                <select id="listSelector" onchange="app.switchListManager()">
+                    <option value="categories">Categories</option>
+                    <option value="priorities">Priorities</option>
+                    <option value="statuses">Statuses</option>
+                    <option value="pendingWith">Pending with</option>
+                </select>
+            </div>
+            <div id="listManagerItems"></div>
+            <div class="add-row">
+                <input autocomplete="off" type="text" id="newListOptionInput" placeholder="Add new option">
+                <button type="button" onclick="app.addListOption()" class="btn-modal primary">Add</button>
+            </div>
+            <label id="newCategorySubCategoryOption" style="display:none; align-items:center; gap:8px; font-size:0.82rem; color:var(--label-2); margin-top:8px; cursor:pointer;">
+                <input type="checkbox" id="newCategoryHasSubCategory" style="width:auto;">
+                This category needs a Sub Category (shown when an entry in it is marked Completed)
+            </label>
+            <div class="lm-foot">
+                <button type="button" onclick="app.clearList()" class="btn-modal danger">Clear This List</button>
+                <button type="button" onclick="app.closeListManager()" class="btn-modal secondary">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CLOUD SETTINGS MODAL -->
+    <div class="modal" id="syncSetupModal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>Cloud Connection</h2>
+                <button class="modal-close" onclick="document.getElementById('syncSetupModal').classList.remove('open')">✕</button>
+            </div>
+            <div class="form-group">
+                <label>Apps Script Web App URL</label>
+                <input autocomplete="off" type="url" id="syncUrlInput" placeholder="https://script.google.com/macros/s/…/exec">
+            </div>
+            <div class="form-group">
+                <label>Authorization Token</label>
+                <input autocomplete="off" type="text" id="authTokenInput" placeholder="PureEnergySecure2026">
+            </div>
+            <div class="form-group">
+                <label>Profile Name</label>
+                <input autocomplete="off" type="text" id="profileInput" placeholder="default">
+            </div>
+            <div class="form-group">
+                <label>Gmail Account Index</label>
+                <input autocomplete="off" type="number" id="gmailIndexInput" min="0" step="1" value="0">
+            </div>
+            <div class="modal-buttons">
+                <button class="btn-modal primary" onclick="app.saveSyncUrlModal()">Save Settings</button>
+                <button class="btn-modal secondary" onclick="document.getElementById('syncSetupModal').classList.remove('open')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SORTING DROPDOWN -->
+    <div class="ms-options" id="sortMenuPanel" style="position:fixed; z-index:900;"></div>
+
+    <input type="file" id="importCSVFile" style="display:none;" accept=".csv" onchange="app.importCSV(event)">
+    
+    <!-- BULK ACTIONS -->
+    <div id="bulkBar">
+        <span id="bulkCount">0 selected</span>
+        <button type="button" class="ok"   id="bulkDone"    onclick="app.bulkAction('done')">Complete</button>
+        <button type="button" class="warn" id="bulkReopen"  onclick="app.bulkAction('reopen')">Reopen</button>
+        <button type="button" class="bad"  id="bulkBin"     onclick="app.bulkAction('bin')">Move to Bin</button>
+        <button type="button" class="ok"   id="bulkRestore" onclick="app.bulkAction('restore')">Restore</button>
+        <button type="button" onclick="app.toggleSelectMode()">Cancel</button>
+    </div>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div id="toastContainer"></div>
 
     <!-- PRIVACY SCREEN LOCK OVERLAY -->
     <div id="privacyLockOverlay" role="dialog" aria-modal="true" aria-label="Security Screen Lock">
@@ -748,6 +1865,8 @@
         </div>
     </div>
 
+    <!-- SCRIPTS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="./app.js"></script>
 </body>
 </html>
