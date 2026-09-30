@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '62';
+const APP_BUILD = '63';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -364,11 +364,92 @@ const app = {
             username: payload.username || this.currentUser,
             token: this.authToken()
         });
+        const ctrl = window.AbortController ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), this.REQUEST_TIMEOUT_MS) : null;
         return fetch(SCRIPT_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(body)
-        }).then(res => res.json());
+            body: JSON.stringify(body),
+            signal: ctrl ? ctrl.signal : undefined
+        }).then(res => res.text()).then(text => {
+            let data;
+            try { data = JSON.parse(text); }
+            catch (e) {
+                // Apps Script sends an HTML page when the deployment is wrong,
+                // needs re-authorising, or crashed — say so plainly.
+                throw new Error(/<html|<!doctype/i.test(text)
+                    ? 'The Apps Script returned a web page instead of data — redeploy it (Deploy → Manage deployments → New version) and check access is "Anyone".'
+                    : 'Unreadable reply from the Apps Script.');
+            }
+            if (data && data.serverTime) this.noteServerTime(Number(data.serverTime));
+            if (data && data.status === 'error' && /unauthori[sz]ed/i.test(data.message || '')) {
+                data.message = 'Security token rejected — set the same token in Config → Cloud Sync → Connection as AUTH_TOKEN in the Apps Script.';
+            }
+            return data;
+        }).catch(err => {
+            if (err && err.name === 'AbortError') throw new Error('The sheet took too long to answer — will retry.');
+            throw err;
+        }).finally(() => { if (timer) clearTimeout(timer); });
+    },
+
+    REQUEST_TIMEOUT_MS: 45000,
+
+    /* ---------- SYNC HEALTH ----------
+       Last success / last error are kept so a silent failure is visible:
+       hover the status pill, or open Config → Cloud Sync. */
+    noteSyncResult(ok, message) {
+        const now = Date.now();
+        let h = {};
+        try { h = JSON.parse(localStorage.getItem('pureEnergySyncHealth') || '{}') || {}; } catch (e) {}
+        if (ok) { h.lastOk = now; h.lastError = ''; h.fails = 0; }
+        else { h.lastFail = now; h.lastError = String(message || 'Unknown error'); h.fails = (Number(h.fails) || 0) + 1; }
+        try { localStorage.setItem('pureEnergySyncHealth', JSON.stringify(h)); } catch (e) {}
+        const pill = document.getElementById('saveStatus');
+        if (pill) pill.title = ok ? 'Last synced ' + new Date(now).toLocaleString('en-IN') : 'Sync problem: ' + h.lastError;
+        // Say it once when sync starts failing repeatedly, not every 15 s.
+        if (!ok && h.fails === 3) this.showToast('Cloud sync keeps failing: ' + h.lastError, 'error');
+        this.renderSyncHealth();
+    },
+
+    renderSyncHealth() {
+        const box = document.getElementById('syncHealth');
+        if (!box) return;
+        let h = {};
+        try { h = JSON.parse(localStorage.getItem('pureEnergySyncHealth') || '{}') || {}; } catch (e) {}
+        const fmt = (ts) => ts ? new Date(ts).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never';
+        const pending = ((this._tomb || { pending: [] }).pending || []).length;
+        const live = this.tasks.filter(t => !t.deleted).length;
+        const skew = Math.round((this.clockOffset || 0) / 1000);
+        box.innerHTML =
+            '<b>Profile:</b> ' + this.sanitize(this.currentUser) +
+            ' · <b>On this device:</b> ' + live + ' entries (' + this.tasks.filter(t => t.deleted).length + ' in Bin)' +
+            '<br><b>Last successful sync:</b> ' + fmt(h.lastOk) +
+            (pending ? ' · <b>' + pending + '</b> deletion(s) waiting to upload' : '') +
+            (Math.abs(skew) >= 30 ? '<br><b>Clock:</b> this device is ' + Math.abs(skew) + ' s ' + (skew > 0 ? 'behind' : 'ahead of') + ' the sheet (corrected automatically)' : '') +
+            (h.lastError ? '<br><span style="color:var(--red-ink);"><b>Last error</b> (' + fmt(h.lastFail) + '): ' + this.sanitize(h.lastError) + '</span>' : '');
+    },
+
+    /* Device clocks drift (a PC a few minutes slow is common). Every edit is
+       stamped with updatedAt and the newest stamp wins, so a slow clock made
+       that device's fresh edits look OLDER than the sheet copy and they were
+       thrown away. Stamps now use the sheet server's clock. */
+    clockOffset: Number(localStorage.getItem('pureEnergyClockOffset')) || 0,
+
+    noteServerTime(serverTs) {
+        if (!serverTs || !isFinite(serverTs)) return;
+        const off = serverTs - Date.now();
+        // smooth it a little; ignore silly values
+        if (Math.abs(off) > 7 * 86400000) return;
+        this.clockOffset = Math.round(this.clockOffset ? (this.clockOffset * 0.5 + off * 0.5) : off);
+        try { localStorage.setItem('pureEnergyClockOffset', String(this.clockOffset)); } catch (e) {}
+    },
+
+    stamp() {
+        // Always strictly increasing on this device, so two quick edits
+        // never share a stamp.
+        const t = Date.now() + (this.clockOffset || 0);
+        this._lastStamp = Math.max(t, (this._lastStamp || 0) + 1);
+        return this._lastStamp;
     },
 
     // A status that means no work has happened on this entry yet — never
@@ -748,6 +829,35 @@ const app = {
         });
         window.addEventListener('online', () => this.syncCycle());
 
+        // Two windows of the app on one device (installed app + browser tab)
+        // share storage. Each used to keep its own in-memory list and write
+        // it back whole — the last window to save silently erased the other
+        // window's changes. Now every window merges what the others save.
+        window.addEventListener('storage', (e) => {
+            if (!e.key || e.newValue === null) return;
+            if (e.key === CONFIG.STORAGE_KEY) {
+                let incoming = [];
+                try { incoming = JSON.parse(e.newValue) || []; } catch (err) { return; }
+                if (!Array.isArray(incoming)) return;
+                this.loadTombstones();
+                const res = this.mergeTasks(incoming);
+                this.tasks = this.tasks.filter(t => !this.isTombstoned(t.id));
+                if (res.added || res.updated) {
+                    try { localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(this.tasks)); } catch (err) {}
+                    this.updateStats();
+                    if (!this.editorOpen()) { this.renderTable(); if (this.currentTab === 'Dashboard') this.renderDashboard(); }
+                }
+            } else if (e.key === CONFIG.TOMBSTONES_KEY) {
+                this.loadTombstones();
+                const before = this.tasks.length;
+                this.tasks = this.tasks.filter(t => !this.isTombstoned(t.id));
+                if (this.tasks.length !== before) { this.updateStats(); if (!this.editorOpen()) this.renderTable(); }
+            } else if (e.key === CONFIG.LISTS_KEY || e.key === CONFIG.HOLIDAYS_KEY) {
+                if (e.key === CONFIG.LISTS_KEY) this.loadLists(); else this.loadHolidays();
+                if (!this.editorOpen()) { this.populateDropdowns(); this.renderTable(); }
+            }
+        });
+
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.multi-select') && !e.target.closest('.ms-options')
                 && !e.target.closest('#sortMenuPanel') && !e.target.closest('[id^="sortToggle"]')) {
@@ -931,6 +1041,7 @@ const app = {
             })
             .catch(err => {
                 if (saver) saver.innerHTML = '<span class="dot" style="background:var(--red)"></span> pull failed';
+                this.noteSyncResult(false, err && err.message);
                 if (manual) this.showToast(err.message || "Cloud pull failed", "error");
             });
     },
@@ -1038,8 +1149,12 @@ const app = {
                 const removedHere = this.applyRemoteTombstones(data.deletedIds);
                 if (removedHere) { this.saveData(); this.renderTable(); }
                 this.applyRemoteCalendar(data);
-                this.lastSyncJSON = JSON.stringify({ t: this.tasks, l: this.lists, ts: this.listsUpdatedAt, h: this.holidaysUpdatedAt, d: (this._tomb || { pending: [] }).pending });
-                if (data.listsSaved === undefined && !this._listsWarned) {
+                // Remember exactly what was SENT. (Recording the current
+                // in-memory state here meant an edit made while the request
+                // was in flight was marked "synced" and never uploaded.)
+                this.lastSyncJSON = snapshot;
+                this.noteSyncResult(true);
+                if (data.deletedIds === undefined && !this._listsWarned) {
                     this._listsWarned = true;
                     this.showToast('Your Apps Script is out of date — category changes are not saving to the sheet.', 'warning');
                 }
@@ -1052,6 +1167,7 @@ const app = {
                 if (mark) mark.classList.remove('busy');
                 console.error('Cloud Sync Error:', error);
                 if (saver) saver.innerHTML = '<span class="dot" style="background:var(--red)"></span> not synced — saved locally';
+                this.noteSyncResult(false, error && error.message);
                 if (manual) this.showToast(error.message || "Sync failed. Your data is safe on this device.", "error");
             });
     },
@@ -1062,18 +1178,33 @@ const app = {
     syncCycle(manual = false) {
         if (!this.currentUser) return;
         if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim() === "") return;
-        if (this.cycleBusy) return;
+        // Watchdog: a cycle that never finished (phone slept mid-request,
+        // network dropped) used to leave cycleBusy = true forever, so the app
+        // showed "syncing..." and never synced again until a reload.
+        if (this.cycleBusy && Date.now() - (this._cycleStartedAt || 0) < this.REQUEST_TIMEOUT_MS * 2 + 5000) return;
 
         if (!manual && document.hidden) return;
-        if (!manual && document.querySelector('.modal.open')) return;
+        // Only pause while an EDITOR is open (a pull rebuilds the dropdowns
+        // the editor is using). Alerts, reminders, mail and settings popups
+        // no longer stop sync — the Past Due Alert is up most of the day, and
+        // it was silently blocking every sync while it was.
+        if (!manual && this.editorOpen()) return;
 
         this.cycleBusy = true;
+        this._cycleStartedAt = Date.now();
+        this.syncInProgress = false;
         Promise.resolve()
             .then(() => this.pullTasksFromCloud(manual, !manual))
             .catch(() => {})
             .then(() => this.syncToGoogleSheets(manual))
             .catch(() => {})
             .then(() => { this.cycleBusy = false; });
+    },
+
+    EDITOR_MODALS: ['taskModal', 'listManagerModal', 'subCategoryRulesModal', 'narrationRulesModal', 'holidayModal', 'calendarManagerModal'],
+
+    editorOpen() {
+        return this.EDITOR_MODALS.some(id => { const m = document.getElementById(id); return m && m.classList.contains('open'); });
     },
 
     openSyncSetup() {
@@ -1699,7 +1830,7 @@ const app = {
         const task = this.findTask(taskId);
         if (!task) return;
         task.recurrence = val || 'None';
-        task.updatedAt = Date.now();
+        task.updatedAt = this.stamp();
         this.saveData();
         this.renderTable();
         this.showToast('Recurrence set to ' + (task.recurrence === 'None' ? "doesn't repeat" : task.recurrence), 'success');
@@ -1709,7 +1840,7 @@ const app = {
         const task = this.findTask(taskId);
         if (!task) return;
         task.deadlineAckDate = this.getLocalDateStr(new Date());
-        task.updatedAt = Date.now();
+        task.updatedAt = this.stamp();
         this.saveData();
         this.processEngine();
         this.showToast('Deadline acknowledged for today.', 'success');
@@ -1745,7 +1876,7 @@ const app = {
             const crossedNow = this.isDeadlineCrossed(task);
             task.lastAckDate = today;
             if (crossedNow) task.deadlineAckDate = today;
-            task.updatedAt = Date.now();
+            task.updatedAt = this.stamp();
             this.saveData(); this.renderTable();
             const laterDeadline = !crossedNow && this.getTaskDeadlineDateTime(task) && this.getTaskDeadlineDateTime(task) > new Date() && task.deadlineDate === today;
             this.showToast(laterDeadline
@@ -1758,7 +1889,7 @@ const app = {
             const mins = parseInt(input ? input.value : '', 10) || 0;
             if (mins <= 0) { this.showToast("Please enter minutes to snooze.", "warning"); return; }
             task.snoozeUntil = Date.now() + (mins * 60000);
-            task.updatedAt = Date.now();
+            task.updatedAt = this.stamp();
             this.saveData();
             this.showToast(`Snoozed for ${mins} minutes.`, "info");
         } else if (action === 'reschedule') {
@@ -1783,7 +1914,7 @@ const app = {
             task.dueTime = this.normalizeTime(newTime);
             task.lastAckDate = null;
             task.snoozeUntil = null;
-            task.updatedAt = Date.now();
+            task.updatedAt = this.stamp();
             this.saveData(); this.renderTable();
             this.showToast("Task rescheduled successfully.", "success");
         }
@@ -1810,7 +1941,7 @@ const app = {
                 // Only deadlines already crossed are silenced; later cut-offs stay armed.
                 if (this.isDeadlineCrossed(task)) task.deadlineAckDate = localTodayStr;
                 task.lastAckDate = localTodayStr;
-                task.updatedAt = Date.now();
+                task.updatedAt = this.stamp();
             });
             this.saveData();
             this.renderTable();
@@ -2391,12 +2522,12 @@ const app = {
             t.dueDate = newDate;
             t.lastAckDate = null;
             t.snoozeUntil = null;
-            t.updatedAt = Date.now();
+            t.updatedAt = this.stamp();
             this.logTaskActivity(t, 'rescheduled', 'Moved off a non-working day to ' + newDate);
             this.showToast('Moved to next working day (' + this.formatDateStr(newDate) + ').', 'success');
         } else {
             t.lastAckDate = this.getLocalDateStr(new Date());
-            t.updatedAt = Date.now();
+            t.updatedAt = this.stamp();
             this.showToast('Kept for today.', 'success');
         }
         this.saveData();
@@ -2810,6 +2941,21 @@ const app = {
 
     saveData() {
         try {
+            // Fold in anything another window saved since we last looked,
+            // before writing our list back.
+            try {
+                const onDisk = JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEY) || '[]');
+                if (Array.isArray(onDisk) && onDisk.length && !this.userClearedAll) {
+                    const mine = new Set(this.tasks.map(t => String(t.id)));
+                    onDisk.forEach(d => {
+                        if (!d || !d.id || this.isTombstoned(d.id)) return;
+                        const key = String(d.id);
+                        if (!mine.has(key)) { this.tasks.push(d); return; }
+                        const cur = this.findTask(key);
+                        if (cur && (Number(d.updatedAt) || 0) > (Number(cur.updatedAt) || 0)) Object.assign(cur, d);
+                    });
+                }
+            } catch (err) {}
             const blob = JSON.stringify(this.tasks);
             localStorage.setItem(CONFIG.STORAGE_KEY, blob);
             this.checkStorageHeadroom(blob.length);
@@ -3410,7 +3556,7 @@ const app = {
         if (btn) btn.classList.add('active');
         document.getElementById('screenTitle').textContent = titles[tab] || tab;
 
-        if (tab === 'Config') { this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
+        if (tab === 'Config') { this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
 
         this.renderTable();
     },
@@ -4678,7 +4824,7 @@ const app = {
             paymentDetails: this.collectPaymentDetails(),
             subCategoryFields: this.collectSubCategoryFields(),
             narration: this.collectNarration(),
-            updatedAt: Date.now()
+            updatedAt: this.stamp()
         };
 
         const paymentError = this.validatePaymentDetails(fields);
@@ -4832,7 +4978,7 @@ const app = {
             purged: false,
             lastAckDate: null,
             snoozeUntil: null,
-            updatedAt: Date.now()
+            updatedAt: this.stamp()
         });
     },
 
@@ -4847,7 +4993,7 @@ const app = {
             // Silence any active overdue alert for today so it doesn't pop
             // back up while the required fields are being filled in.
             t.lastAckDate = this.getLocalDateStr(new Date());
-            t.updatedAt = Date.now();
+            t.updatedAt = this.stamp();
             this.saveData();
             if (this.isAlarming) this.stopPersistentAlarm(false);
 
@@ -4870,7 +5016,7 @@ const app = {
         t.completedDate = this.getLocalDateStr(new Date());
         t.lastAckDate = null;
         t.snoozeUntil = null;
-        t.updatedAt = Date.now();
+        t.updatedAt = this.stamp();
 
         const repeat = this.nextOccurrence(t);
         if (repeat) {
@@ -4907,7 +5053,7 @@ const app = {
         t.deadlineAckDate = todayStr;
         if (!Array.isArray(t.skippedDates)) t.skippedDates = [];
         if (t.skippedDates.indexOf(todayStr) === -1) t.skippedDates.push(todayStr);
-        t.updatedAt = Date.now();
+        t.updatedAt = this.stamp();
 
         this.saveData();
         this.renderTable();
@@ -4933,7 +5079,7 @@ const app = {
         t.completedDate = null;
         t.lastAckDate = null;
         t.snoozeUntil = null;
-        t.updatedAt = Date.now();
+        t.updatedAt = this.stamp();
 
         this.saveData();
         this.renderTable();
@@ -4949,7 +5095,7 @@ const app = {
 
         t.deleted = true;
         t.dateDeleted = this.getLocalDateStr(new Date());
-        t.updatedAt = Date.now();
+        t.updatedAt = this.stamp();
 
         this.alarmingTasks = this.alarmingTasks.filter(a => String(a.id) !== String(id));
         if (this.alarmingTasks.length === 0 && this.isAlarming) this.stopPersistentAlarm(false);
@@ -4967,7 +5113,7 @@ const app = {
 
         t.deleted = false;
         t.dateDeleted = null;
-        t.updatedAt = Date.now();
+        t.updatedAt = this.stamp();
 
         this.saveData();
         this.renderTable();
@@ -5018,7 +5164,7 @@ const app = {
             g.slice(1).forEach(t => {
                 t.deleted = true;
                 t.dateDeleted = todayStr;
-                t.updatedAt = Date.now();
+                t.updatedAt = this.stamp();
             });
         });
 
@@ -5675,22 +5821,22 @@ const app = {
                 t.status = 'Completed';
                 t.completedDate = todayStr;
                 t.lastAckDate = null; t.snoozeUntil = null;
-                t.updatedAt = Date.now();
+                t.updatedAt = this.stamp();
                 const repeat = this.nextOccurrence(t);
                 if (repeat) { if (!t.seriesId) t.seriesId = repeat.seriesId; spawned.push(repeat); }
                 this.logTaskActivity(t, 'completed', this.reportDetailsFor(t));
             } else if (kind === 'reopen') {
                 t.status = pending;
                 t.completedDate = null; t.lastAckDate = null; t.snoozeUntil = null;
-                t.updatedAt = Date.now();
+                t.updatedAt = this.stamp();
             } else if (kind === 'bin') {
                 t.deleted = true;
                 t.dateDeleted = todayStr;
-                t.updatedAt = Date.now();
+                t.updatedAt = this.stamp();
             } else if (kind === 'restore') {
                 t.deleted = false;
                 t.dateDeleted = null;
-                t.updatedAt = Date.now();
+                t.updatedAt = this.stamp();
             } else {
                 return;
             }

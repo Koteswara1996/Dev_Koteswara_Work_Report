@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#e2e8f2">
-    <meta name="btw-build" content="62">
+    <meta name="btw-build" content="63">
     <link rel="icon" href="./favicon.svg" type="image/svg+xml">
     <meta name="description" content="Track banking follow-ups, payment deadlines and mail chains.">
     <link rel="manifest" href="./manifest.webmanifest">
@@ -1835,6 +1835,8 @@
                 <button class="sheet-item" onclick="app.restoreFromCloud()"><span class="ico">⤓</span>Restore</button>
                 <button class="sheet-item" onclick="app.openSyncSetup()"><span class="ico">🔗</span>Connection</button>
             </div>
+            <p class="cfg-hint" id="syncHealth" style="margin:14px 0 0; line-height:1.7;"></p>
+            <p class="cfg-hint" style="margin:6px 0 0;">Every device must use the <b>same Profile Name</b> and the <b>same token</b> (Connection) to share one set of entries.</p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgDataBackup" data-cfg-panel="cfgDataBackup">
             <div class="dash-title">Data Backup</div>
@@ -2299,6 +2301,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="./app.js?v=62"></script>
+    <script src="./app.js?v=63"></script>
 </body>
 </html>
