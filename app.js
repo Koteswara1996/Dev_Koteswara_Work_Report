@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '64';
+const APP_BUILD = '66';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -383,8 +383,7 @@ const app = {
             }
             if (data && data.serverTime) this.noteServerTime(Number(data.serverTime));
             if (data && data.status === 'error' && /unauthori[sz]ed/i.test(data.message || '')) {
-                data.message = 'Security token rejected — the token in Config → Cloud Sync → Connection must match AUTH_TOKEN in the Apps Script (Project Settings → Script Properties). Use "Test connection" to check.';
-                data.kind = 'config';
+                data.message = 'The deployed Apps Script still checks a token — paste the latest Code.gs (no token) and deploy a New version.';
             }
             if (data && data.scriptVersion) this.serverVersion = String(data.scriptVersion);
             return data;
@@ -405,15 +404,18 @@ const app = {
         const t = String(html || '');
         const title = ((/<title[^>]*>([^<]*)<\/title>/i.exec(t) || [])[1] || '').trim();
         const low = (title + ' ' + t.slice(0, 4000)).toLowerCase();
-        if (/accounts\.google\.com|sign in|servicelogin/.test(low))
-            return 'Google asked for a sign-in: the web app\'s access is not "Anyone". In Apps Script: Deploy → Manage deployments → Edit → Who has access: Anyone → Deploy.';
+        // "Sorry, unable to open the file at this time" is Google's generic
+        // BUSY page — it shows up for a minute or two and goes away. It does
+        // not mean the URL is wrong (that same URL synced moments earlier).
+        if (/unable to open the file at this time|try again|temporar|busy|503|502|500/.test(low))
+            return 'Google Apps Script was busy for a moment (temporary) — retrying automatically.';
         if (/too many times|quota|rate limit|429/.test(low))
-            return 'Google is rate-limiting the script (too many calls). Close extra tabs/windows of the app; sync will slow down and retry by itself.';
-        if (/not found|unable to open|does not exist|404/.test(low))
-            return 'That script URL no longer exists — you probably made a NEW deployment (new URL). Copy the current /exec URL from Deploy → Manage deployments into Connection.';
+            return 'Google is rate-limiting the script for a while — retrying automatically, more slowly.';
+        if (/accounts\.google\.com|sign in|servicelogin/.test(low))
+            return 'Google asked for a sign-in — in Apps Script set Deploy → Manage deployments → Edit → Who has access: Anyone.';
         if (/authori[sz]ation|permission|access denied|403/.test(low))
-            return 'The script needs permission again. Open the Apps Script, run testGeminiCall once and approve access, then Deploy → Manage deployments → New version.';
-        return 'Google returned an error page' + (title ? ' ("' + title + '")' : '') + ' instead of data. Redeploy: Deploy → Manage deployments → Edit → Version: New version → Deploy.';
+            return 'The script needs your permission again — open Apps Script, press Run on any function and approve.';
+        return 'Google returned a temporary error page' + (title ? ' ("' + title + '")' : '') + ' — retrying automatically.';
     },
     /* ---------- SYNC HEALTH ----------
        Last success / last error are kept so a silent failure is visible:
@@ -423,25 +425,27 @@ const app = {
         let h = {};
         try { h = JSON.parse(localStorage.getItem('pureEnergySyncHealth') || '{}') || {}; } catch (e) {}
         if (ok) {
-            h.lastOk = now; h.lastError = ''; h.fails = 0;
+            h.lastOk = now; h.lastError = ''; h.fails = 0; h.failingSince = 0; h.notified = false;
             this.syncPaused = ''; this.syncBackoffUntil = 0;
         } else {
+            // Sync NEVER pauses itself any more. Google's busy page and other
+            // hiccups are temporary, so every failure just waits a little
+            // longer (15 s → 30 s → 1 min … max 5 min) and tries again.
             h.lastFail = now; h.lastError = String(message || 'Unknown error'); h.fails = (Number(h.fails) || 0) + 1;
-            const setup = /token rejected|error page|sign-in|no longer exists|permission again|not "anyone"/i.test(h.lastError);
-            if (setup) this.syncPaused = h.lastError;
-            else {
-                const rate = /rate-limit|too many/i.test(h.lastError);
-                const delay = Math.min(300000, (rate ? 60000 : 15000) * Math.pow(2, Math.max(0, h.fails - 1)));
-                this.syncBackoffUntil = now + delay;
-            }
+            if (!h.failingSince) h.failingSince = now;
+            this.syncPaused = '';
+            this.syncBackoffUntil = now + Math.min(300000, 15000 * Math.pow(2, Math.max(0, h.fails - 1)));
         }
         try { localStorage.setItem('pureEnergySyncHealth', JSON.stringify(h)); } catch (e) {}
         const pill = document.getElementById('saveStatus');
         if (pill) pill.title = ok ? 'Last synced ' + new Date(now).toLocaleString('en-IN') : 'Sync problem: ' + h.lastError;
-        // Say it once when sync starts failing repeatedly, not every 15 s.
-        if (!ok && (h.fails === 3 || (this.syncPaused && h.fails === 1))) {
-            this.showToast((this.syncPaused ? 'Cloud sync paused: ' : 'Cloud sync keeps failing: ') + h.lastError, 'error',
-                { label: 'Fix', onClick: () => this.openSyncSetup() });
+        // One quiet notice only if sync has been failing for 30+ minutes —
+        // short outages fix themselves and aren't worth interrupting you.
+        if (!ok && !h.notified && now - h.failingSince >= 30 * 60000 && h.fails >= 5) {
+            h.notified = true;
+            try { localStorage.setItem('pureEnergySyncHealth', JSON.stringify(h)); } catch (e) {}
+            this.showToast('Cloud sync has not worked for 30 min — your entries are safe on this device. Still retrying.', 'warning',
+                { label: 'Details', onClick: () => { this.switchTab('Config'); this.showCfgPanel('cfgCloudSync'); } });
         }
         this.renderSyncHealth();
     },
@@ -456,14 +460,13 @@ const app = {
         const live = this.tasks.filter(t => !t.deleted).length;
         const skew = Math.round((this.clockOffset || 0) / 1000);
         box.innerHTML =
-            '<b>Profile:</b> ' + this.sanitize(this.currentUser) +
-            ' · <b>On this device:</b> ' + live + ' entries (' + this.tasks.filter(t => t.deleted).length + ' in Bin)' +
+            '<b>On this device:</b> ' + live + ' entries (' + this.tasks.filter(t => t.deleted).length + ' in Bin)' +
             '<br><b>Last successful sync:</b> ' + fmt(h.lastOk) +
             (pending ? ' · <b>' + pending + '</b> deletion(s) waiting to upload' : '') +
             (Math.abs(skew) >= 30 ? '<br><b>Clock:</b> this device is ' + Math.abs(skew) + ' s ' + (skew > 0 ? 'behind' : 'ahead of') + ' the sheet (corrected automatically)' : '') +
-            (this.syncPaused ? '<br><span style="color:var(--red-ink);"><b>Auto-sync is paused</b> until the connection is fixed — open <b>Connection</b> and use <b>Test connection</b>.</span>' : '') +
-            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (this.serverVersion !== APP_BUILD ? ' (app is ' + APP_BUILD + ' — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
-            (h.lastError ? '<br><span style="color:var(--red-ink);"><b>Last error</b> (' + fmt(h.lastFail) + '): ' + this.sanitize(h.lastError) + '</span>' : '');
+            (h.fails ? '<br><span style="color:var(--amber-ink);"><b>Retrying automatically</b> — ' + h.fails + ' attempt(s) missed since ' + fmt(h.failingSince) + '. Nothing is lost; entries are kept on this device until the sheet answers.</span>' : '') +
+            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (Number(this.serverVersion) < 66 ? ' (older — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
+            (h.lastError ? '<br><span style="color:var(--label-2);"><b>Last message from Google</b> (' + fmt(h.lastFail) + '): ' + this.sanitize(h.lastError) + '</span>' : '');
     },
 
     /* Device clocks drift (a PC a few minutes slow is common). Every edit is
@@ -1061,10 +1064,14 @@ const app = {
         if (saver && !silent) saver.innerHTML = '<span class="dot" style="background:var(--blue)"></span> pulling...';
 
         this._pullFailed = false;
+        const pendingAtStart = ((this._tomb || this.loadTombstones()).pending || []).slice();
+        const snapAtStart = this.syncSnapshot(pendingAtStart);
+        const cleanAtStart = !!this.lastSyncJSON && snapAtStart === this.lastSyncJSON;
         return this.cloudRequest({ action: "fetchTasks" })
             .then(data => {
                 if (!data || data.status !== 'success') throw new Error((data && data.message) || "Failed to pull tasks");
                 this.noteSyncResult(true);
+                const untouched = this.syncSnapshot(pendingAtStart) === snapAtStart;
 
                 const removed = this.applyRemoteTombstones(data.deletedIds);
                 const result = this.mergeTasks(data.tasks);
@@ -1074,6 +1081,9 @@ const app = {
                 this.saveData();
                 this.populateDropdowns();
                 this.renderTable();
+                // Nothing was edited here, so what we now hold simply IS the
+                // sheet's copy — don't upload it straight back.
+                if (cleanAtStart && untouched) this.lastSyncJSON = this.syncSnapshot(((this._tomb || { pending: [] }).pending) || []);
 
                 const moved = result.added + result.updated;
                 if (manual) {
@@ -1087,9 +1097,7 @@ const app = {
             .catch(err => {
                 this._pullFailed = true;
                 this.noteSyncResult(false, err && err.message);
-                if (saver) saver.innerHTML = this.syncPaused
-                    ? '<span class="dot" style="background:var(--red)"></span> sync paused — tap to fix'
-                    : '<span class="dot" style="background:var(--red)"></span> offline — saved here';
+                if (saver) saver.innerHTML = '<span class="dot" style="background:var(--amber)"></span> ' + (navigator.onLine ? 'retrying…' : 'offline — saved here');
                 if (manual) this.showToast(err.message || "Cloud pull failed", "error");
             });
     },
@@ -1158,7 +1166,7 @@ const app = {
 
         const tomb = this._tomb || this.loadTombstones();
         const pendingDeletes = tomb.pending.slice();
-        const snapshot = JSON.stringify({ t: this.tasks, l: this.lists, ts: this.listsUpdatedAt, h: this.holidaysUpdatedAt, d: pendingDeletes });
+        const snapshot = this.syncSnapshot(pendingDeletes);
         if (!manual && snapshot === this.lastSyncJSON) return Promise.resolve();
 
         const payload = {
@@ -1195,13 +1203,23 @@ const app = {
                     t.pending = t.pending.filter(id => pendingDeletes.indexOf(id) === -1);
                     this.saveTombstones();
                 }
+                const unchangedInFlight = this.syncSnapshot(pendingDeletes) === snapshot;
                 const removedHere = this.applyRemoteTombstones(data.deletedIds);
-                if (removedHere) { this.saveData(); this.renderTable(); }
+                // The upload's reply already carries the sheet's merged copy,
+                // so take other devices' changes from it — no separate
+                // download call needed (half the calls to Google).
+                let merged = { added: 0, updated: 0 };
+                if (Array.isArray(data.tasks) && !this.editorOpen()) {
+                    merged = this.mergeTasks(data.tasks);
+                    this.applyRemoteLists(data.lists, data.listsUpdatedAt);
+                }
+                if (removedHere || merged.added || merged.updated) { this.saveData(); this.populateDropdowns(); this.renderTable(); }
                 this.applyRemoteCalendar(data);
-                // Remember exactly what was SENT. (Recording the current
-                // in-memory state here meant an edit made while the request
-                // was in flight was marked "synced" and never uploaded.)
-                this.lastSyncJSON = snapshot;
+                // Remember exactly what was SENT — unless nothing was edited
+                // while the request was in flight, in which case the merged
+                // result is what the sheet now holds too. (Recording edits made
+                // mid-flight as "synced" was the old lost-update bug.)
+                this.lastSyncJSON = unchangedInFlight ? this.syncSnapshot((this._tomb || { pending: [] }).pending) : snapshot;
                 this.noteSyncResult(true);
                 if (data.deletedIds === undefined && !this._listsWarned) {
                     this._listsWarned = true;
@@ -1216,11 +1234,19 @@ const app = {
                 if (mark) mark.classList.remove('busy');
                 console.error('Cloud Sync Error:', error);
                 this.noteSyncResult(false, error && error.message);
-                if (saver) saver.innerHTML = this.syncPaused
-                    ? '<span class="dot" style="background:var(--red)"></span> sync paused — tap to fix'
-                    : '<span class="dot" style="background:var(--red)"></span> not synced — saved locally';
+                if (saver) saver.innerHTML = '<span class="dot" style="background:var(--amber)"></span> ' + (navigator.onLine ? 'retrying…' : 'offline — saved here');
                 if (manual) this.showToast(error.message || "Sync failed. Your data is safe on this device.", "error");
             });
+    },
+
+    syncSnapshot(pending) {
+        return JSON.stringify({ t: this.tasks, l: this.lists, ts: this.listsUpdatedAt, h: this.holidaysUpdatedAt, d: pending || [] });
+    },
+
+    // Something on this device the sheet doesn't have yet?
+    hasLocalChanges() {
+        const tomb = this._tomb || this.loadTombstones();
+        return this.syncSnapshot(tomb.pending) !== this.lastSyncJSON;
     },
 
     SYNC_EVERY_MS: 15000,
@@ -1253,10 +1279,14 @@ const app = {
         this.cycleBusy = true;
         this._cycleStartedAt = Date.now();
         this.syncInProgress = false;
+        this._pullFailed = false;     // only THIS cycle's download counts
         Promise.resolve()
-            .then(() => this.pullTasksFromCloud(manual, !manual))
+            // One call per cycle: upload (whose reply brings everyone else's
+            // changes) when this device has something new, otherwise just
+            // download. "Sync now" still does both.
+            .then(() => (manual || !this.hasLocalChanges() || !this.lastSyncJSON) ? this.pullTasksFromCloud(manual, !manual) : null)
             .catch(() => {})
-            .then(() => (this.syncPaused || this._pullFailed) ? null : this.syncToGoogleSheets(manual))
+            .then(() => (this._pullFailed && !manual) ? null : this.syncToGoogleSheets(manual))
             .catch(() => {})
             .then(() => { this.cycleBusy = false; });
     },
@@ -1282,22 +1312,16 @@ const app = {
     openSyncSetup() {
         document.getElementById('syncUrlInput').value = localStorage.getItem(CONFIG.SYNC_URL_KEY) || '';
         document.getElementById('gmailIndexInput').value = localStorage.getItem(CONFIG.GMAIL_INDEX_KEY) || '0';
-        document.getElementById('profileInput').value = this.currentUser || 'default';
-        const tok = document.getElementById('syncTokenInput');
-        if (tok) { tok.value = localStorage.getItem(CONFIG.TOKEN_KEY) || ''; tok.type = 'password'; }
         const res = document.getElementById('connTestResult');
         if (res) { res.style.display = 'none'; res.innerHTML = ''; }
         document.getElementById('syncSetupModal').classList.add('open');
     },
 
-    // Checks the URL / token / profile typed in the Connection box WITHOUT
-    // saving them, and says exactly what's wrong.
+    // Checks the URL typed in the Connection box WITHOUT saving it.
     testConnection() {
         const out = document.getElementById('connTestResult');
         const btn = document.getElementById('connTestBtn');
         const url = (document.getElementById('syncUrlInput').value || '').trim();
-        const token = (document.getElementById('syncTokenInput').value || '').trim() || CONFIG.DEFAULT_TOKEN;
-        const profile = ((document.getElementById('profileInput').value || '').trim().toLowerCase()) || 'default';
         const show = (ok, html) => { out.className = 'conn-result ' + (ok ? 'ok' : 'bad'); out.innerHTML = html; out.style.display = 'block'; };
         if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) {
             show(false, '<b>URL looks wrong.</b> It must look like https://script.google.com/macros/s/…/exec (copy it from Deploy → Manage deployments).');
@@ -1307,25 +1331,19 @@ const app = {
         const ctrl = window.AbortController ? new AbortController() : null;
         const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
         fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'ping', token: token, username: profile }), signal: ctrl ? ctrl.signal : undefined })
+            body: JSON.stringify({ action: 'ping', token: this.authToken(), username: this.currentUser }), signal: ctrl ? ctrl.signal : undefined })
             .then(r => r.text())
             .then(text => {
                 let data = null;
                 try { data = JSON.parse(text); } catch (e) {}
-                if (!data) { show(false, '<b>Reached Google, but not your script.</b><br>' + this.sanitize(this.explainHtmlReply(text))); return; }
-                if (data.status === 'error' && /unauthori[sz]ed/i.test(data.message || '')) {
-                    show(false, '<b>Script reached ✓ — token rejected ✗</b><br>The token here' + ((document.getElementById('syncTokenInput').value || '').trim() ? '' : ' (blank = PureEnergySecure2026)') +
-                        ' does not match <b>AUTH_TOKEN</b> in Apps Script → Project Settings → Script Properties. Make them identical (watch for spaces), then Save.');
-                    return;
-                }
-                if (data.status === 'error' && /unknown action: ping/i.test(data.message || '')) {
-                    show(true, '<b>Script reached ✓ · Token accepted ✓</b><br>Your deployed Code.gs is an older build. Sync will work, but paste the latest Code.gs and deploy a <b>New version</b> to get the fixes.');
+                if (!data) { show(false, '<b>Google answered, but not with your data.</b><br>' + this.sanitize(this.explainHtmlReply(text)) + '<br>If this keeps happening for more than a few minutes, redeploy the script (Deploy → Manage deployments → ✏ Edit → New version).'); return; }
+                if (data.status === 'error' && /unauthori[sz]ed|unknown action: ping/i.test(data.message || '')) {
+                    show(false, '<b>Connected ✓ — but the deployed script is an older build.</b><br>Paste the latest Code.gs into Apps Script and deploy a <b>New version</b> (same deployment).');
                     return;
                 }
                 if (data.status === 'success') {
-                    show(true, '<b>Connected ✓ · Token accepted ✓</b><br>Profile <b>' + this.sanitize(profile) + '</b> → sheet tab <b>' + this.sanitize(data.sheet || '') + '</b> has <b>' + (data.taskCount || 0) +
-                        '</b> entries.' + (data.scriptVersion && String(data.scriptVersion) !== APP_BUILD ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' vs app ' + APP_BUILD + ' — deploy the latest Code.gs as a New version.' : '') +
-                        (data.otherProfiles && data.otherProfiles.length ? '<br>Other profiles in this sheet: ' + data.otherProfiles.map(p => this.sanitize(p)).join(', ') + ' — every device must use the same one.' : '') +
+                    show(true, '<b>Connected ✓</b><br>Your sheet has <b>' + (data.taskCount || 0) + '</b> entries (tab ' + this.sanitize(data.sheet || '') + ').' +
+                        (data.scriptVersion && Number(data.scriptVersion) < 66 ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' — deploy the latest Code.gs as a New version.' : '') +
                         '<br>Tap <b>Save Settings</b> to use this.');
                     return;
                 }
@@ -1333,8 +1351,8 @@ const app = {
             })
             .catch(err => {
                 show(false, err && err.name === 'AbortError'
-                    ? '<b>No answer in 30 s.</b> The script may be busy or rate-limited — close other tabs of the app and try again.'
-                    : '<b>Could not reach script.google.com.</b> Check your internet, or a browser shield/extension blocking it (e.g. Brave Shields).');
+                    ? '<b>No answer in 30 s.</b> Google is busy — try again in a minute.'
+                    : '<b>Could not reach script.google.com.</b> Check your internet, or a browser shield/extension blocking it.');
             })
             .finally(() => { if (timer) clearTimeout(timer); if (btn) { btn.disabled = false; btn.textContent = 'Test connection'; } });
     },
@@ -1348,19 +1366,6 @@ const app = {
         }
         if (url) localStorage.setItem(CONFIG.SYNC_URL_KEY, url);
         localStorage.setItem(CONFIG.GMAIL_INDEX_KEY, idx);
-        const tokEl = document.getElementById('syncTokenInput');
-        if (tokEl) {
-            const tok = tokEl.value.trim();
-            if (tok) localStorage.setItem(CONFIG.TOKEN_KEY, tok); else localStorage.removeItem(CONFIG.TOKEN_KEY);
-        }
-
-        const profile = (document.getElementById('profileInput').value || '').trim().toLowerCase() || 'default';
-        if (profile !== this.currentUser) {
-            localStorage.setItem('currentUser', profile);
-            this.showToast('Profile changed — reloading', 'info');
-            setTimeout(() => window.location.reload(), 700);
-            return;
-        }
         document.getElementById('syncSetupModal').classList.remove('open');
         this.syncPaused = ''; this.syncBackoffUntil = 0;
         this.showToast("Settings saved — syncing", "success");
@@ -3681,7 +3686,8 @@ const app = {
         if (btn) btn.classList.add('active');
         document.getElementById('screenTitle').textContent = titles[tab] || tab;
 
-        if (tab === 'Config') { this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
+        document.body.classList.toggle('fab-on', ['Register', 'Dashboard', 'Completed', 'Holidays'].indexOf(tab) !== -1);
+        if (tab === 'Config') { this.renderLayoutPick(); this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
 
         this.renderTable();
     },
@@ -5577,17 +5583,74 @@ const app = {
        phone and still get bottom tabs. */
     resolvedShell() {
         if (typeof window.__shell === 'function') return window.__shell();
-        const w = window.innerWidth || 1024;
-        const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-        if (w <= 900) return 'mobile';
-        if (coarse && w <= 1180) return 'mobile';
-        return 'desktop';
+        return /iPhone|iPod|Android.+Mobile/i.test(navigator.userAgent || '') ? 'mobile' : 'desktop';
     },
 
     applyShell() {
         const shell = this.resolvedShell();
+        const before = document.documentElement.getAttribute('data-shell');
         document.documentElement.setAttribute('data-shell', shell);
+        this.placeTabBar(shell);
+        if (before && before !== shell) {
+            const cfg = document.getElementById('cfgShell');
+            if (cfg) cfg.classList.remove('showing-panel');
+        }
         return shell;
+    },
+
+    /* On phones the tab bar floats at the bottom of the screen. It has to
+       live outside the header: the header's entrance animation made it the
+       tab bar's positioning box, so "fixed to the bottom" landed on top of
+       the page title instead. On desktop it goes back inside the header. */
+    placeTabBar(shell) {
+        const bar = document.getElementById('tabBar');
+        const header = document.getElementById('mainAppHeader');
+        if (!bar || !header) return;
+        if (!this._tabHome) {
+            this._tabHome = document.createComment('tabbar-home');
+            bar.parentNode.insertBefore(this._tabHome, bar);
+        }
+        if (shell === 'mobile') {
+            if (bar.parentNode !== document.body) header.parentNode.insertBefore(bar, header.nextSibling);
+        } else if (this._tabHome.parentNode && bar.previousSibling !== this._tabHome) {
+            this._tabHome.parentNode.insertBefore(bar, this._tabHome.nextSibling);
+        }
+    },
+
+    // The phone's floating + does whatever the current tab's own + does
+    // (new entry, or new holiday on the Holidays tab).
+    fabAction() {
+        const tabEl = document.getElementById(({ Holidays: 'holidaysTab', Completed: 'completedTab' })[this.currentTab] || 'registerTab');
+        const own = tabEl && tabEl.querySelector('.compact-toolbar > .btn-new-entry');
+        if (own && this.currentTab === 'Holidays') { own.click(); return; }
+        this.openTaskModal();
+    },
+
+    shellPref() {
+        const v = localStorage.getItem('pureEnergyShell');
+        return v === 'mobile' || v === 'desktop' ? v : 'auto';
+    },
+
+    setShellPref(v) {
+        if (v === 'auto') localStorage.removeItem('pureEnergyShell');
+        else localStorage.setItem('pureEnergyShell', v);
+        this.applyShell();
+        const beforeView = document.body.dataset.view;
+        if (this.applyViewMode() !== beforeView) this.renderTable();
+        this.renderLayoutPick();
+        this.updateHeader && this.updateHeader();
+        this.showToast(v === 'auto' ? 'Layout follows this device (' + this.resolvedShell() + ')' : 'Layout: ' + v, 'info');
+    },
+
+    renderLayoutPick() {
+        const pref = this.shellPref();
+        document.querySelectorAll('#layoutPick button').forEach(b => b.classList.toggle('active', b.dataset.shell === pref));
+        const hint = document.getElementById('layoutPickHint');
+        if (hint) {
+            let auto = 'desktop';
+            try { const saved = localStorage.getItem('pureEnergyShell'); localStorage.removeItem('pureEnergyShell'); auto = window.__shell ? window.__shell() : auto; if (saved) localStorage.setItem('pureEnergyShell', saved); } catch (e) {}
+            hint.textContent = 'This device is detected as a ' + (auto === 'mobile' ? 'phone' : 'computer') + '. Auto uses the ' + auto + ' layout here.';
+        }
     },
 
     resolvedView() {

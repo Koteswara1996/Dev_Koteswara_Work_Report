@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#e2e8f2">
-    <meta name="btw-build" content="64">
+    <meta name="btw-build" content="66">
     <link rel="icon" href="./favicon.svg" type="image/svg+xml">
     <meta name="description" content="Track banking follow-ups, payment deadlines and mail chains.">
     <link rel="manifest" href="./manifest.webmanifest">
@@ -30,11 +30,28 @@
             /* Decide the shell before anything paints. A phone asking for the
                desktop site fakes a ~980px viewport but still reports a coarse
                pointer, so check both. app.js reuses this exact function. */
+            /* Layout follows the DEVICE, never the window width: a phone
+               always gets the phone layout (even in landscape or with
+               "Desktop site" on), and a computer always gets the desktop
+               layout (even in a half-screen window or zoomed to 150%).
+               Config → Appearance → Layout can force either one. */
             window.__shell = function () {
-                var w = window.innerWidth || document.documentElement.clientWidth || 1024;
-                var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-                if (w <= 900) return 'mobile';
-                if (coarse && w <= 1180) return 'mobile';
+                try {
+                    var forced = localStorage.getItem('pureEnergyShell');
+                    if (forced === 'mobile' || forced === 'desktop') return forced;
+                } catch (e) {}
+                var ua = navigator.userAgent || '';
+                var uad = navigator.userAgentData;
+                var tablet = /iPad|Tablet/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+                if (!tablet && uad && uad.mobile === true) return 'mobile';
+                if (tablet) { /* tablets decided by screen size below */ }
+                else if (/iPhone|iPod|Android.+Mobile|Windows Phone|IEMobile|BlackBerry|BB10|Opera Mini|Opera Mobi|webOS|Mobile Safari/i.test(ua)) return 'mobile';
+                // Touch-only device (no mouse). Phones, and small tablets, get
+                // the phone layout — even when they pretend to be a PC.
+                var mm = window.matchMedia ? function (q) { return window.matchMedia(q).matches; } : function () { return false; };
+                var touchOnly = mm('(pointer: coarse)') && !mm('(any-pointer: fine)');
+                var shortSide = Math.min(screen.width || 9999, screen.height || 9999);
+                if (touchOnly && shortSide < 700) return 'mobile';
                 return 'desktop';
             };
             document.documentElement.setAttribute('data-shell', window.__shell());
@@ -1301,6 +1318,69 @@
             color: var(--accent); text-decoration: none; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 8px;
         }
         .edit-options-btn:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+        /* ── PHONE: toolbars, new-entry button, tabs ───────────────
+           Search gets its own full-width row (it used to be squeezed to
+           nothing by the icons), icons sit on a second row that scrolls
+           sideways if needed, table-only tools are hidden in card view,
+           and "+ New entry" becomes a round button above the tab bar. */
+        html[data-shell="mobile"] .compact-toolbar { flex-wrap: wrap; row-gap: 10px; gap: 8px; padding: 10px var(--gutter, 16px); }
+        html[data-shell="mobile"] .compact-toolbar > .toolbar-search-wrap { flex: 1 1 100%; order: -1; }
+        html[data-shell="mobile"] .compact-toolbar .search-compact { height: 42px; font-size: 16px; } /* 16px stops iOS zooming on focus */
+        html[data-shell="mobile"] .compact-toolbar > .btn-icon { width: 40px; height: 40px; min-width: 40px; font-size: 1.05rem; border-radius: 12px; }
+        html[data-shell="mobile"] body[data-view="cards"] .compact-toolbar > [onclick^="app.fitColumns"],
+        html[data-shell="mobile"] .compact-toolbar > [onclick^="app.printRegister"],
+        html[data-shell="mobile"] .compact-toolbar > [onclick^="app.printCompleted"] { display: none; }
+        html[data-shell="mobile"] .compact-toolbar > .btn-new-entry { display: none; }
+        .mobile-fab { display: none; }
+        html[data-shell="mobile"] body.fab-on .mobile-fab {
+            display: grid; place-items: center; position: fixed; z-index: 95; right: 20px;
+            bottom: calc(var(--tabbar-h) + 30px + env(safe-area-inset-bottom, 0px));
+            width: 58px; height: 58px; border: 0; border-radius: 50%; cursor: pointer;
+            font-size: 1.9rem; font-weight: 400; line-height: 1; color: #fff; background: var(--accent);
+            box-shadow: 0 12px 30px rgba(0,122,255,0.38), 0 2px 6px rgba(0,0,0,0.18);
+            -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+        }
+        html[data-shell="mobile"] body.fab-on .mobile-fab:active { transform: scale(0.93); }
+        html[data-shell="mobile"] body.selecting .mobile-fab { display: none; }
+        html[data-shell="mobile"] .filter-panel { right: 12px; left: 12px; width: auto; max-height: 64vh; }
+        /* inputs at 16px so iOS Safari doesn't zoom the page on focus */
+        html[data-shell="mobile"] input, html[data-shell="mobile"] select, html[data-shell="mobile"] textarea { font-size: 16px; }
+        html[data-shell="mobile"] .tabbar-btn .badge { z-index: 2; box-shadow: 0 0 0 2px var(--glass-header-bg); }
+        html[data-shell="mobile"] .tabbar-btn .badge:not(.red) { background: var(--label-2); color: #fff; transform: translateX(16px) scale(0.9); }
+        html[data-shell="mobile"] .tabbar-btn { min-width: 0; }
+        @media (max-width: 380px) {
+            html[data-shell="mobile"] .tabbar { left: 8px; right: 8px; padding: 5px; gap: 2px; }
+            html[data-shell="mobile"] .tabbar-lbl { font-size: 0.6rem; letter-spacing: -0.01em; }
+            html[data-shell="mobile"] .tabbar-ico { width: 22px; height: 22px; }
+        }
+        /* comfortable tap targets */
+        html[data-shell="mobile"] .btn-modal { min-height: 48px; }
+        html[data-shell="mobile"] .modal-close { width: 38px; height: 38px; }
+
+        /* ── DESKTOP in a narrow window (half-screen, zoomed) ───────
+           Stays the desktop layout, just tightens the header so the tabs
+           never slide over the logo and title. */
+        @media (max-width: 1240px) {
+            html[data-shell="desktop"] .appbar { padding: 0 18px; gap: 10px; }
+            html[data-shell="desktop"] .tabbar-btn { padding: 0 12px; }
+        }
+        @media (max-width: 1080px) {
+            html[data-shell="desktop"] .appbar-titles { display: none; }
+        }
+        @media (max-width: 900px) {
+            html[data-shell="desktop"] .tabbar { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+            html[data-shell="desktop"] .tabbar::-webkit-scrollbar { display: none; }
+            html[data-shell="desktop"] .tabbar-btn { padding: 0 10px; font-size: 0.8rem; flex: 0 0 auto; }
+            html[data-shell="desktop"] #saveStatus { font-size: 0; gap: 0; padding: 8px; }
+            html[data-shell="desktop"] #saveStatus .dot { margin: 0; }
+            html[data-shell="desktop"] .stat-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+        }
+        .layout-pick { margin-bottom: 18px; }
+        .layout-pick-lbl { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--label-2); margin-bottom: 8px; }
+        .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 14px; background: var(--fill); border: 1px solid var(--glass-border-subtle); }
+        .seg button { padding: 8px 14px; border: 0; border-radius: 10px; background: transparent; color: var(--label); font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+        .seg button.active { background: var(--glass-bg-hover); color: var(--accent); box-shadow: var(--glass-shadow-sm); }
         .conn-result { margin-top: 4px; padding: 12px 14px; border-radius: 14px; font-size: 0.84rem; line-height: 1.55; font-weight: 500; color: var(--label); background: var(--fill); border: 1px solid var(--line); }
         .conn-result.ok { border-color: var(--green); background: rgba(52,199,89,0.10); }
         .conn-result.bad { border-color: var(--red); background: rgba(255,59,48,0.08); }
@@ -1761,6 +1841,15 @@
                 <button type="button" class="cfg-back-btn" id="cfgBackBtn" onclick="app.showCfgNav()">‹ Settings</button>
 <div class="cfg-section cfg-panel" id="cfgAppearance" data-cfg-panel="cfgAppearance">
             <div class="dash-title">Appearance (iOS Glass Themes)</div>
+            <div class="layout-pick">
+                <div class="layout-pick-lbl">Layout</div>
+                <div class="seg" id="layoutPick">
+                    <button type="button" data-shell="auto" onclick="app.setShellPref('auto')">Auto (by device)</button>
+                    <button type="button" data-shell="desktop" onclick="app.setShellPref('desktop')">🖥 Desktop</button>
+                    <button type="button" data-shell="mobile" onclick="app.setShellPref('mobile')">📱 Mobile</button>
+                </div>
+                <div class="cfg-hint" id="layoutPickHint" style="margin-top:6px;"></div>
+            </div>
             <div class="theme-row">
                 <button class="theme-btn" data-theme="pearl" onclick="app.applyTheme('pearl')">⚪ Pearl</button>
                 <button class="theme-btn" data-theme="glass" onclick="app.applyTheme('glass')">🪩 Glassmorphism</button>
@@ -1840,7 +1929,7 @@
                 <button class="sheet-item" onclick="app.openSyncSetup()"><span class="ico">🔗</span>Connection</button>
             </div>
             <p class="cfg-hint" id="syncHealth" style="margin:14px 0 0; line-height:1.7;"></p>
-            <p class="cfg-hint" style="margin:6px 0 0;">Every device must use the <b>same Profile Name</b> and the <b>same token</b> (Connection) to share one set of entries.</p>
+            <p class="cfg-hint" style="margin:6px 0 0;">All your devices share one set of entries — just paste the same script URL on each. If Google is busy for a moment, sync retries on its own.</p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgDataBackup" data-cfg-panel="cfgDataBackup">
             <div class="dash-title">Data Backup</div>
@@ -2243,17 +2332,6 @@
                 <input autocomplete="off" type="url" id="syncUrlInput" placeholder="https://script.google.com/macros/s/…/exec">
             </div>
             <div class="form-group">
-                <label>Security Token <span class="lbl-note">(AUTH_TOKEN in Script Properties)</span></label>
-                <div class="input-copy">
-                    <input autocomplete="off" type="password" id="syncTokenInput" placeholder="Blank = script default (PureEnergySecure2026)">
-                    <button type="button" class="in-copy" onclick="const i=document.getElementById('syncTokenInput'); i.type = i.type === 'password' ? 'text' : 'password';" title="Show / hide" aria-label="Show or hide token">👁</button>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>Profile Name</label>
-                <input autocomplete="off" type="text" id="profileInput" placeholder="default">
-            </div>
-            <div class="form-group">
                 <label>Gmail Account Index</label>
                 <input autocomplete="off" type="number" id="gmailIndexInput" min="0" step="1" value="0">
             </div>
@@ -2279,6 +2357,7 @@
         <button type="button" onclick="app.toggleSelectMode()">Cancel</button>
     </div>
 
+    <button type="button" class="mobile-fab" id="mobileFab" onclick="app.fabAction()" aria-label="Add new" title="Add new">＋</button>
     <div id="toastContainer"></div>
 
     <!-- PRIVACY SHIELD (tab/app switch) -->
@@ -2310,6 +2389,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="./app.js?v=64"></script>
+    <script src="./app.js?v=66"></script>
 </body>
 </html>
