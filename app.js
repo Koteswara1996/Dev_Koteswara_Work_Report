@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '66';
+const APP_BUILD = '67';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -465,7 +465,7 @@ const app = {
             (pending ? ' · <b>' + pending + '</b> deletion(s) waiting to upload' : '') +
             (Math.abs(skew) >= 30 ? '<br><b>Clock:</b> this device is ' + Math.abs(skew) + ' s ' + (skew > 0 ? 'behind' : 'ahead of') + ' the sheet (corrected automatically)' : '') +
             (h.fails ? '<br><span style="color:var(--amber-ink);"><b>Retrying automatically</b> — ' + h.fails + ' attempt(s) missed since ' + fmt(h.failingSince) + '. Nothing is lost; entries are kept on this device until the sheet answers.</span>' : '') +
-            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (Number(this.serverVersion) < 66 ? ' (older — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
+            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (Number(this.serverVersion) < 67 ? ' (older — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
             (h.lastError ? '<br><span style="color:var(--label-2);"><b>Last message from Google</b> (' + fmt(h.lastFail) + '): ' + this.sanitize(h.lastError) + '</span>' : '');
     },
 
@@ -738,6 +738,15 @@ const app = {
         this.setCfgActivePanel(slug, true);
         const shell = document.getElementById('cfgShell');
         if (shell) shell.classList.add('showing-panel');
+        // Desktop shows every section at once — jump to the one asked for.
+        if (document.documentElement.getAttribute('data-shell') === 'desktop') {
+            const el = document.querySelector('.cfg-panel[data-cfg-panel="' + slug + '"]');
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                el.classList.add('flash');
+                setTimeout(() => el.classList.remove('flash'), 1200);
+            }
+        }
     },
 
     showCfgNav() {
@@ -939,6 +948,8 @@ const app = {
             case 'copy-mail': {
                 const t = this.findTask(id);
                 if (t) this.copyToClipboard(t.mailChain || '', el);
+                // On a Tasks card, the copy button also opens the entry for editing.
+                if (t && el.closest('#taskCardList')) setTimeout(() => this.openTaskModal(id), 250);
                 break;
             }
             case 'copy-narration': {
@@ -1058,55 +1069,11 @@ const app = {
         if (changed) this.saveLists(false);
     },
 
-    pullTasksFromCloud(manual = false, silent = false) {
-        if (!this.currentUser) return Promise.resolve();
-        const saver = document.getElementById('saveStatus');
-        if (saver && !silent) saver.innerHTML = '<span class="dot" style="background:var(--blue)"></span> pulling...';
-
-        this._pullFailed = false;
-        const pendingAtStart = ((this._tomb || this.loadTombstones()).pending || []).slice();
-        const snapAtStart = this.syncSnapshot(pendingAtStart);
-        const cleanAtStart = !!this.lastSyncJSON && snapAtStart === this.lastSyncJSON;
-        return this.cloudRequest({ action: "fetchTasks" })
-            .then(data => {
-                if (!data || data.status !== 'success') throw new Error((data && data.message) || "Failed to pull tasks");
-                this.noteSyncResult(true);
-                const untouched = this.syncSnapshot(pendingAtStart) === snapAtStart;
-
-                const removed = this.applyRemoteTombstones(data.deletedIds);
-                const result = this.mergeTasks(data.tasks);
-                result.updated += removed;
-                this.applyRemoteLists(data.lists, data.listsUpdatedAt);
-                this.applyRemoteCalendar(data);
-                this.saveData();
-                this.populateDropdowns();
-                this.renderTable();
-                // Nothing was edited here, so what we now hold simply IS the
-                // sheet's copy — don't upload it straight back.
-                if (cleanAtStart && untouched) this.lastSyncJSON = this.syncSnapshot(((this._tomb || { pending: [] }).pending) || []);
-
-                const moved = result.added + result.updated;
-                if (manual) {
-                    this.showToast(moved ? `Merged from cloud: ${result.added} new, ${result.updated} updated` : "Already up to date with cloud.", moved ? "success" : "info");
-                } else if (moved) {
-                    this.showToast(`Updated from another device: ${moved} ${moved === 1 ? 'entry' : 'entries'}`, "info");
-                }
-                const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-                if (saver) saver.innerHTML = `<span class="dot" style="background:var(--green)"></span> synced ${timeStr}`;
-            })
-            .catch(err => {
-                this._pullFailed = true;
-                this.noteSyncResult(false, err && err.message);
-                if (saver) saver.innerHTML = '<span class="dot" style="background:var(--amber)"></span> ' + (navigator.onLine ? 'retrying…' : 'offline — saved here');
-                if (manual) this.showToast(err.message || "Cloud pull failed", "error");
-            });
-    },
-
     restoreFromCloud() {
         if (!confirm("This REPLACES every entry on this device with the cloud copy.\n\nA CSV backup of your current data will be downloaded first.\n\nContinue?")) return;
         this.exportData('csv', true);
 
-        this.cloudRequest({ action: "fetchTasks" })
+        this.cloudRequest({ action: "fetchTasks", since: 0 })
             .then(data => {
                 if (!data || data.status !== 'success') throw new Error((data && data.message) || "Failed to fetch cloud copy");
                 this.applyRemoteTombstones(data.deletedIds);
@@ -1116,8 +1083,14 @@ const app = {
                     return this.normalizeTaskShape(t);
                 });
                 this.applyRemoteLists(data.lists, data.listsUpdatedAt);
+                this.applyRemoteCalendar(data);
+                const st = this.syncState();
+                st.ack = {}; this.tasks.forEach(t => { st.ack[String(t.id)] = Number(t.updatedAt) || 0; });
+                st.cursor = Number(data.serverTime) || 0;
+                this.saveSyncState();
                 this.userClearedAll = true;
                 this.saveData();
+                this.userClearedAll = false;
                 this.renderTable();
                 this.showToast(`Restored ${this.tasks.length} entries from cloud`, "success");
             })
@@ -1158,137 +1131,192 @@ const app = {
         localStorage.setItem(CONFIG.HOLIDAYS_TS_KEY, String(this.holidaysUpdatedAt));
     },
 
-    syncToGoogleSheets(manual = false) {
-        if (!this.currentUser) return Promise.resolve();
-        if (this.syncInProgress) return Promise.resolve();
-        if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim() === "") return Promise.resolve();
-        if (!manual && (this.syncPaused || Date.now() < (this.syncBackoffUntil || 0))) return Promise.resolve();
+    /* ================= DELTA SYNC ENGINE =================
+       The device remembers, per entry, which version the sheet already has
+       (ack map) and the server time of its last successful call (cursor).
+       Each call uploads ONLY entries edited since then and downloads ONLY
+       rows written since then — a few entries, not the whole register.
+       First run on a device (cursor 0) does one full download, then
+       uploads anything local-only in batches of 100. */
+    MAX_PUSH: 100,
 
-        const tomb = this._tomb || this.loadTombstones();
-        const pendingDeletes = tomb.pending.slice();
-        const snapshot = this.syncSnapshot(pendingDeletes);
-        if (!manual && snapshot === this.lastSyncJSON) return Promise.resolve();
-
-        const payload = {
-            action: "syncTasks",
-            lists: this.lists,
-            listsUpdatedAt: this.listsUpdatedAt || 0,
-            deletedIds: pendingDeletes,
-            holidays: this.holidays,
-            leaveDays: this.leaveDays || [],
-            customCalendars: this.customCalendars || [],
-            holidaysUpdatedAt: this.holidaysUpdatedAt || 0
+    syncState() {
+        if (this._sync && this._sync.user === this.currentUser) return this._sync;
+        const u = this.currentUser;
+        let ack = {};
+        try { ack = JSON.parse(localStorage.getItem('pureEnergySyncAck_' + u) || '{}') || {}; } catch (e) {}
+        this._sync = {
+            user: u, ack: ack,
+            cursor: Number(localStorage.getItem('pureEnergySyncCursor_' + u)) || 0,
+            listsAck: Number(localStorage.getItem('pureEnergySyncListsAck_' + u)) || 0,
+            calAck: Number(localStorage.getItem('pureEnergySyncCalAck_' + u)) || 0
         };
-
-        if (this.tasks.length > 0 || this.userClearedAll) {
-            payload.tasks = this.tasks;
-        } else if (manual) {
-            this.showToast("No entries on this device — syncing your lists only.", "warning");
-        }
-
-        this.syncInProgress = true;
-        const mark = document.getElementById('appMark');
-        if (mark) mark.classList.add('busy');
-        const saver = document.getElementById('saveStatus');
-        if (saver) saver.innerHTML = '<span class="dot" style="background:var(--blue)"></span> syncing...';
-
-        return this.cloudRequest(payload)
-            .then(data => {
-                this.syncInProgress = false;
-                if (mark) mark.classList.remove('busy');
-                if (!data || data.status !== 'success') throw new Error((data && data.message) ? data.message : "Unknown sync failure");
-                // Deletions the sheet now holds are no longer pending.
-                if (pendingDeletes.length) {
-                    const t = this._tomb || this.loadTombstones();
-                    t.pending = t.pending.filter(id => pendingDeletes.indexOf(id) === -1);
-                    this.saveTombstones();
-                }
-                const unchangedInFlight = this.syncSnapshot(pendingDeletes) === snapshot;
-                const removedHere = this.applyRemoteTombstones(data.deletedIds);
-                // The upload's reply already carries the sheet's merged copy,
-                // so take other devices' changes from it — no separate
-                // download call needed (half the calls to Google).
-                let merged = { added: 0, updated: 0 };
-                if (Array.isArray(data.tasks) && !this.editorOpen()) {
-                    merged = this.mergeTasks(data.tasks);
-                    this.applyRemoteLists(data.lists, data.listsUpdatedAt);
-                }
-                if (removedHere || merged.added || merged.updated) { this.saveData(); this.populateDropdowns(); this.renderTable(); }
-                this.applyRemoteCalendar(data);
-                // Remember exactly what was SENT — unless nothing was edited
-                // while the request was in flight, in which case the merged
-                // result is what the sheet now holds too. (Recording edits made
-                // mid-flight as "synced" was the old lost-update bug.)
-                this.lastSyncJSON = unchangedInFlight ? this.syncSnapshot((this._tomb || { pending: [] }).pending) : snapshot;
-                this.noteSyncResult(true);
-                if (data.deletedIds === undefined && !this._listsWarned) {
-                    this._listsWarned = true;
-                    this.showToast('Your Apps Script is out of date — category changes are not saving to the sheet.', 'warning');
-                }
-                const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-                if (saver) saver.innerHTML = `<span class="dot" style="background:var(--green)"></span> synced ${timeStr}`;
-                if (manual) this.showToast("Cloud sync successful!", "success");
-            })
-            .catch(error => {
-                this.syncInProgress = false;
-                if (mark) mark.classList.remove('busy');
-                console.error('Cloud Sync Error:', error);
-                this.noteSyncResult(false, error && error.message);
-                if (saver) saver.innerHTML = '<span class="dot" style="background:var(--amber)"></span> ' + (navigator.onLine ? 'retrying…' : 'offline — saved here');
-                if (manual) this.showToast(error.message || "Sync failed. Your data is safe on this device.", "error");
-            });
+        return this._sync;
     },
 
-    syncSnapshot(pending) {
-        return JSON.stringify({ t: this.tasks, l: this.lists, ts: this.listsUpdatedAt, h: this.holidaysUpdatedAt, d: pending || [] });
+    saveSyncState() {
+        const st = this.syncState(), u = st.user;
+        try {
+            localStorage.setItem('pureEnergySyncAck_' + u, JSON.stringify(st.ack));
+            localStorage.setItem('pureEnergySyncCursor_' + u, String(st.cursor));
+            localStorage.setItem('pureEnergySyncListsAck_' + u, String(st.listsAck));
+            localStorage.setItem('pureEnergySyncCalAck_' + u, String(st.calAck));
+        } catch (e) {}
     },
 
-    // Something on this device the sheet doesn't have yet?
+    resetSyncState() {
+        const st = this.syncState();
+        st.ack = {}; st.cursor = 0; st.listsAck = 0; st.calAck = 0;
+        this.saveSyncState();
+    },
+
+    dirtyTasks() {
+        const ack = this.syncState().ack;
+        return this.tasks.filter(t => t && t.id && ack[String(t.id)] !== (Number(t.updatedAt) || 0));
+    },
+
     hasLocalChanges() {
+        const st = this.syncState();
+        if (!st.cursor) return true;
         const tomb = this._tomb || this.loadTombstones();
-        return this.syncSnapshot(tomb.pending) !== this.lastSyncJSON;
+        return tomb.pending.length > 0 || (this.listsUpdatedAt || 0) > st.listsAck ||
+            (this.holidaysUpdatedAt || 0) > st.calAck || this.dirtyTasks().length > 0;
     },
 
-    SYNC_EVERY_MS: 15000,
+    runSync(opts) {
+        opts = opts || {};
+        const manual = !!opts.manual;
+        if (!this.currentUser) return Promise.resolve();
+        if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim() === '') {
+            if (manual) this.showToast('Add your sheet link in Config → Cloud Sync → Connection', 'info');
+            return Promise.resolve();
+        }
+        if (this._syncRunning) { this._syncAgain = true; this._syncAgainManual = this._syncAgainManual || manual; return this._syncRunning; }
+
+        const st = this.syncState();
+        const first = !st.cursor;
+        const dirty = first ? [] : this.dirtyTasks();
+        const batch = dirty.slice(0, this.MAX_PUSH);
+        const tomb = this._tomb || this.loadTombstones();
+        const pending = tomb.pending.slice();
+        const sent = batch.map(t => ({ id: String(t.id), ts: Number(t.updatedAt) || 0 }));
+
+        const payload = { action: 'syncTasks', since: st.cursor, tasks: batch, deletedIds: pending,
+            listsUpdatedAt: this.listsUpdatedAt || 0, holidaysUpdatedAt: this.holidaysUpdatedAt || 0 };
+        const sendLists = !first && (this.listsUpdatedAt || 0) > st.listsAck;
+        const sendCal = !first && (this.holidaysUpdatedAt || 0) > st.calAck;
+        if (sendLists) payload.lists = this.lists;
+        if (sendCal) { payload.holidays = this.holidays; payload.leaveDays = this.leaveDays || []; payload.customCalendars = this.customCalendars || []; }
+        const listsTsSent = this.listsUpdatedAt || 0, calTsSent = this.holidaysUpdatedAt || 0;
+
+        const mark = document.getElementById('appMark');
+        const saver = document.getElementById('saveStatus');
+        if (mark) mark.classList.add('busy');
+        if (saver && (manual || batch.length || first)) saver.innerHTML = '<span class="dot" style="background:var(--blue)"></span> syncing…';
+        this.syncInProgress = true;
+        let ok = false;
+
+        this._syncRunning = this.cloudRequest(payload).then(data => {
+            if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Sync failed');
+            ok = true;
+
+            if (pending.length) {
+                tomb.pending = tomb.pending.filter(id => pending.indexOf(id) === -1);
+                this.saveTombstones();
+            }
+            const removed = this.applyRemoteTombstones(data.deletedIds);
+            const incoming = Array.isArray(data.tasks) ? data.tasks : [];
+            const res = this.mergeTasks(incoming);
+
+            // What the sheet now holds, per entry:
+            incoming.forEach(r => { if (r && r.id) st.ack[String(r.id)] = Number(r.updatedAt) || 0; });
+            const accepted = Array.isArray(data.accepted) ? new Set(data.accepted.map(String)) : null;
+            const rejected = new Set((data.rejected || []).map(String));
+            sent.forEach(s => { if (accepted ? accepted.has(s.id) : !rejected.has(s.id)) st.ack[s.id] = s.ts; });
+            if (data.full) {            // forget acks for entries that no longer exist anywhere
+                const live = new Set(this.tasks.map(t => String(t.id)));
+                Object.keys(st.ack).forEach(id => { if (!live.has(id)) delete st.ack[id]; });
+            }
+            if (sendLists) st.listsAck = listsTsSent;
+            if (sendCal) st.calAck = calTsSent;
+            this.applyRemoteLists(data.lists, data.listsUpdatedAt);
+            this.applyRemoteCalendar(data);
+            if (first) { st.listsAck = Math.max(st.listsAck, Math.min(this.listsUpdatedAt || 0, Number(data.listsUpdatedAt) || 0)); }
+            if (data.serverTime) st.cursor = Number(data.serverTime);
+            this.saveSyncState();
+
+            const moved = res.added + res.updated + removed;
+            if (moved) {
+                this.saveData();
+                if (!this.editorOpen()) this.populateDropdowns();
+                this.renderTable();
+            }
+            this.noteSyncResult(true);
+            const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+            if (saver) saver.innerHTML = `<span class="dot" style="background:var(--green)"></span> synced ${timeStr}`;
+
+            if (manual) {
+                this.showToast(sent.length || moved
+                    ? `Synced — sent ${sent.length}, received ${moved}` + (dirty.length > batch.length ? ` (${dirty.length - batch.length} more on the way)` : '')
+                    : 'Already up to date', sent.length || moved ? 'success' : 'info');
+            } else if (moved && !first) {
+                this.showToast(`Updated from another device: ${moved} ${moved === 1 ? 'entry' : 'entries'}`, 'info');
+            }
+            // More to send (first run, or a big batch)? Go again right away.
+            if (first || dirty.length > batch.length || this.hasLocalChanges()) this._syncAgain = true;
+        }).catch(err => {
+            console.error('Sync error:', err);
+            this._syncAgain = false;
+            this.noteSyncResult(false, err && err.message);
+            if (saver) saver.innerHTML = '<span class="dot" style="background:var(--amber)"></span> ' + (navigator.onLine ? 'retrying…' : 'offline — saved here');
+            if (manual) this.showToast((err && err.message) || 'Sync failed — your entries are safe on this device.', 'error');
+        }).then(() => {
+            this.syncInProgress = false;
+            if (mark) mark.classList.remove('busy');
+            this._syncRunning = null;
+            if (ok && this._syncAgain) {
+                const again = this._syncAgainManual; this._syncAgain = false; this._syncAgainManual = false;
+                setTimeout(() => this.runSync({ manual: again && false }), 400);
+            }
+        });
+        return this._syncRunning;
+    },
+
+    // "Pull changes" and "Sync now" — both are the same single call now.
+    pullTasksFromCloud(manual = false) {
+        return this.runSync({ manual: manual });
+    },
+
+    // Called after every local change: waits 1.5 s so a burst of edits
+    // goes up as one small call.
+    syncToGoogleSheets(manual = false) {
+        if (manual) return this.runSync({ manual: true });
+        clearTimeout(this._pushTimer);
+        this._pushTimer = setTimeout(() => {
+            if (Date.now() < (this.syncBackoffUntil || 0)) return;   // the cycle will retry
+            if (!this.claimSyncLeader()) return;
+            this.runSync({});
+        }, 1500);
+        return Promise.resolve();
+    },
+
+    SYNC_EVERY_MS: 30000,
     cycleBusy: false,
 
     syncCycle(manual = false) {
         if (!this.currentUser) return;
-        if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim() === "") return;
-        // Watchdog: a cycle that never finished (phone slept mid-request,
-        // network dropped) used to leave cycleBusy = true forever, so the app
-        // showed "syncing..." and never synced again until a reload.
-        if (this.cycleBusy && Date.now() - (this._cycleStartedAt || 0) < this.REQUEST_TIMEOUT_MS * 2 + 5000) return;
-
+        if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim() === '') return;
         if (!manual && document.hidden) return;
-        // A setup problem (wrong token, wrong URL, access not "Anyone") won't
-        // fix itself — stop calling Google every 15 s until it's fixed.
-        if (!manual && this.syncPaused) return;
-        // After ordinary failures, back off: 15 s, 30 s, 1 min … up to 5 min.
+        // After failures, wait a little longer each time: 15 s … 5 min.
         if (!manual && Date.now() < (this.syncBackoffUntil || 0)) return;
-        // Only ONE window per device talks to the sheet (installed app and a
-        // browser tab used to double every call); the others pick up its
-        // results through shared storage.
+        // Only ONE window per device talks to the sheet.
         if (!manual && !this.claimSyncLeader()) return;
-        // Only pause while an EDITOR is open (a pull rebuilds the dropdowns
-        // the editor is using). Alerts, reminders, mail and settings popups
-        // no longer stop sync — the Past Due Alert is up most of the day, and
-        // it was silently blocking every sync while it was.
+        // Don't swap dropdowns under an open editor.
         if (!manual && this.editorOpen()) return;
-
-        this.cycleBusy = true;
-        this._cycleStartedAt = Date.now();
-        this.syncInProgress = false;
-        this._pullFailed = false;     // only THIS cycle's download counts
-        Promise.resolve()
-            // One call per cycle: upload (whose reply brings everyone else's
-            // changes) when this device has something new, otherwise just
-            // download. "Sync now" still does both.
-            .then(() => (manual || !this.hasLocalChanges() || !this.lastSyncJSON) ? this.pullTasksFromCloud(manual, !manual) : null)
-            .catch(() => {})
-            .then(() => (this._pullFailed && !manual) ? null : this.syncToGoogleSheets(manual))
-            .catch(() => {})
-            .then(() => { this.cycleBusy = false; });
+        // A request stuck for too long (phone slept) must not block forever.
+        if (this._syncRunning && Date.now() - (this._syncStartedAt || 0) > this.REQUEST_TIMEOUT_MS + 10000) this._syncRunning = null;
+        this._syncStartedAt = Date.now();
+        this.runSync({ manual: manual });
     },
 
     TAB_ID: Math.random().toString(36).slice(2),
@@ -1343,7 +1371,7 @@ const app = {
                 }
                 if (data.status === 'success') {
                     show(true, '<b>Connected ✓</b><br>Your sheet has <b>' + (data.taskCount || 0) + '</b> entries (tab ' + this.sanitize(data.sheet || '') + ').' +
-                        (data.scriptVersion && Number(data.scriptVersion) < 66 ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' — deploy the latest Code.gs as a New version.' : '') +
+                        (data.scriptVersion && Number(data.scriptVersion) < 67 ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' — deploy the latest Code.gs as a New version.' : '') +
                         '<br>Tap <b>Save Settings</b> to use this.');
                     return;
                 }
@@ -3183,10 +3211,10 @@ const app = {
         document.querySelectorAll('.filter-panel.open').forEach(p => p.classList.remove('open'));
     },
 
+    // Search keeps its own width now — clicking it no longer hides the
+    // rest of the toolbar.
     expandSearch(key) {
         this.closeAllFilterPanels();
-        const row = document.getElementById(key + 'Toolbar');
-        if (row) row.classList.add('search-expanded');
     },
 
     collapseSearch(key) {
@@ -4414,6 +4442,8 @@ const app = {
             document.getElementById('narrationPreview').value = '';
             const wrap = document.getElementById('narrationFieldsWrap');
             if (wrap) wrap.style.display = 'none';
+            const pvGroup = document.getElementById('narrationPreviewGroup');
+            if (pvGroup) pvGroup.style.display = 'none';
         }
     },
 
@@ -4712,6 +4742,8 @@ const app = {
         const wrap = document.getElementById('narrationFieldsWrap');
         const nr = (this.lists.narrationTypes || []).find(x => x.name === name);
         if (wrap) wrap.style.display = nr ? '' : 'none';
+        const pvGroup = document.getElementById('narrationPreviewGroup');
+        if (pvGroup) pvGroup.style.display = nr ? '' : 'none';
         const pctGroup = document.getElementById('narrationPercentGroup');
         if (pctGroup) pctGroup.style.display = (nr && nr.hasPercent) ? '' : 'none';
         const docLabelEl = document.getElementById('narrationDocLabel');
@@ -5369,6 +5401,7 @@ const app = {
             (cfg.rows.length ? '<b>' + cfg.total + ' open</b>' : '') + '</h3>';
 
         if (!cfg.rows.length) {
+            if (cfg.hideEmpty) return '';
             return '<section class="dash-section">' + head +
                 '<div class="dash-none">' + this.sanitize(cfg.empty) + '</div></section>';
         }
@@ -5386,7 +5419,7 @@ const app = {
                 '</button>';
         }).join('');
 
-        return '<section class="dash-section">' + head + '<div class="mini-grid">' + tiles + '</div></section>';
+        return '<section class="dash-section' + (cfg.wide ? ' wide' : '') + '">' + head + '<div class="mini-grid">' + tiles + '</div></section>';
     },
 
     renderDashboard() {
@@ -5485,14 +5518,14 @@ const app = {
         const total = open.length;
         chartBox.innerHTML = [
             this.dashSection({
-                title: 'By Category', ftype: 'category', total: total,
+                title: 'By Category', ftype: 'category', total: total, wide: true,
                 rows: this.dashGroup(open, 'category', 'Uncategorised'),
                 empty: 'Nothing open to break down.'
             }),
             this.dashSection({
                 title: 'By Sub Category', ftype: 'subCategory', total: open.filter(t => t.subCategory).length,
                 rows: this.dashGroup(open.filter(t => t.subCategory), 'subCategory', 'No sub category'),
-                empty: 'No sub categories in use yet.'
+                empty: 'No sub categories in use yet.', hideEmpty: true
             }),
             this.dashSection({
                 title: 'By Status', ftype: 'status', total: total,

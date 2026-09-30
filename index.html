@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#e2e8f2">
-    <meta name="btw-build" content="66">
+    <meta name="btw-build" content="67">
     <link rel="icon" href="./favicon.svg" type="image/svg+xml">
     <meta name="description" content="Track banking follow-ups, payment deadlines and mail chains.">
     <link rel="manifest" href="./manifest.webmanifest">
@@ -1110,7 +1110,28 @@
         .stat-label { font-size: 0.8rem; font-weight: 700; color: var(--label); }
         .stat-sub { font-size: 0.7rem; font-weight: 600; color: var(--label-3); }
 
-        .dash-section { margin-bottom: 20px; }
+        /* Breakdowns sit side by side as cards and fill the width, instead of
+           one thin row each with the right side of the screen left empty. */
+        #dashCharts {
+            display: grid; gap: 14px; align-items: start;
+            grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
+        }
+        .dash-section {
+            margin: 0; padding: 14px 14px 12px; border-radius: 18px;
+            background: var(--glass-bg); border: 1px solid var(--glass-border-subtle); box-shadow: var(--glass-shadow-sm);
+        }
+        .dash-section.wide { grid-column: span 2; }
+        @media (max-width: 800px) { .dash-section.wide { grid-column: auto; } }
+        html[data-shell="mobile"] .dash-section.wide { grid-column: auto; }
+        .dash-section .mini-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+        .dash-section .mini-tile { padding: 8px 10px; background: var(--fill); box-shadow: none; }
+        .dash-section .mini-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; }
+        html[data-shell="desktop"] .greet { margin-bottom: 10px; }
+        html[data-shell="desktop"] .greet h1 { font-size: 1.55rem; }
+        html[data-shell="desktop"] .greet p { font-size: 0.92rem; }
+        html[data-shell="desktop"] .stat-grid { gap: 10px; margin-bottom: 14px; }
+        html[data-shell="desktop"] .stat-tile { padding: 10px 14px; }
+        html[data-shell="desktop"] .stat-num { font-size: 1.45rem; }
         .dash-section h3 {
             display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px;
             font-size: 0.78rem; font-weight: 800; letter-spacing: 0.06em;
@@ -1324,10 +1345,6 @@
            nothing by the icons), icons sit on a second row that scrolls
            sideways if needed, table-only tools are hidden in card view,
            and "+ New entry" becomes a round button above the tab bar. */
-        html[data-shell="mobile"] .compact-toolbar { flex-wrap: wrap; row-gap: 10px; gap: 8px; padding: 10px var(--gutter, 16px); }
-        html[data-shell="mobile"] .compact-toolbar > .toolbar-search-wrap { flex: 1 1 100%; order: -1; }
-        html[data-shell="mobile"] .compact-toolbar .search-compact { height: 42px; font-size: 16px; } /* 16px stops iOS zooming on focus */
-        html[data-shell="mobile"] .compact-toolbar > .btn-icon { width: 40px; height: 40px; min-width: 40px; font-size: 1.05rem; border-radius: 12px; }
         html[data-shell="mobile"] body[data-view="cards"] .compact-toolbar > [onclick^="app.fitColumns"],
         html[data-shell="mobile"] .compact-toolbar > [onclick^="app.printRegister"],
         html[data-shell="mobile"] .compact-toolbar > [onclick^="app.printCompleted"] { display: none; }
@@ -1376,6 +1393,91 @@
             html[data-shell="desktop"] #saveStatus .dot { margin: 0; }
             html[data-shell="desktop"] .stat-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
         }
+
+        /* ── TOOLBARS: everything on ONE line ─────────────────────────────
+           Search keeps its own modest width (it no longer takes over the
+           whole bar when you click it). On desktop every filter is shown
+           inline — nothing hidden behind the ⚙ button. */
+        .compact-toolbar.search-expanded > *:not(.toolbar-search-wrap) { display: revert !important; }
+        .compact-toolbar .search-cancel-btn { display: none !important; }
+        .compact-toolbar .toolbar-search-wrap:has(input:not(:placeholder-shown)) .search-cancel-btn { display: flex !important; }
+
+        html[data-shell="desktop"] .compact-toolbar { flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
+        html[data-shell="desktop"] .compact-toolbar > .toolbar-search-wrap { flex: 0 0 230px; order: 0; }
+        html[data-shell="desktop"] .compact-toolbar > .filter-panel {
+            order: 1; display: flex !important; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px;
+            position: static; width: auto; max-height: none; overflow: visible; padding: 0; margin: 0;
+            background: none; border: 0; box-shadow: none; flex: 1 1 auto; min-width: 0;
+        }
+        html[data-shell="desktop"] .compact-toolbar > .filter-panel .filter-panel-group { flex: 1 1 150px; min-width: 118px; max-width: 220px; }
+        html[data-shell="desktop"] .compact-toolbar > .filter-panel .filter-panel-group > label:not(:has(input)) { display: none; }
+        html[data-shell="desktop"] .compact-toolbar > .filter-panel .filter-panel-group > label:has(input) { margin: 0; white-space: nowrap; }
+        html[data-shell="desktop"] .compact-toolbar > .filter-panel .ms-header,
+        html[data-shell="desktop"] .compact-toolbar > .filter-panel .filter-select { height: 36px; font-size: 0.82rem; padding: 0 10px; }
+        html[data-shell="desktop"] .compact-toolbar > .filter-panel-divider,
+        html[data-shell="desktop"] .compact-toolbar > .gear-btn { display: none; }
+        html[data-shell="desktop"] .compact-toolbar > .btn-icon, html[data-shell="desktop"] .compact-toolbar > .btn-new-entry { order: 2; flex: 0 0 auto; }
+
+        html[data-shell="mobile"] .compact-toolbar { flex-wrap: nowrap; gap: 6px; padding: 10px var(--gutter, 16px); }
+        html[data-shell="mobile"] .compact-toolbar > .toolbar-search-wrap { flex: 1 1 auto; min-width: 110px; max-width: 260px; order: 0; }
+        .mobile-only { display: none !important; }
+        html[data-shell="mobile"] .filter-panel .mobile-only { display: flex !important; }
+        /* phones: the bar keeps search + filters + sort + view; select / mail /
+           clear live in the ⚙ sheet so search isn't squeezed */
+        html[data-shell="mobile"] #registerToolbar > [onclick="app.toggleSelectMode()"],
+        html[data-shell="mobile"] #registerToolbar > [onclick="app.openEmailModal()"],
+        html[data-shell="mobile"] #registerToolbar > .btn-icon.bad,
+        html[data-shell="mobile"] #completedToolbar > [onclick="app.toggleSelectMode()"],
+        html[data-shell="mobile"] #completedToolbar > .btn-icon.bad,
+        html[data-shell="mobile"] .compact-toolbar > [onclick^="app.fitColumns"] { display: none !important; }
+        html[data-shell="mobile"] .compact-toolbar .search-compact { height: 40px; font-size: 16px; }
+        html[data-shell="mobile"] .compact-toolbar > .btn-icon { flex: 0 0 auto; width: 38px; height: 38px; min-width: 38px; padding: 0; font-size: 1rem; border-radius: 11px; }
+        @media (max-width: 380px) { html[data-shell="mobile"] .compact-toolbar > .btn-icon { width: 33px; height: 33px; min-width: 33px; font-size: 0.9rem; } html[data-shell="mobile"] .compact-toolbar { gap: 4px; } }
+
+        /* ── TASK CARDS: tighter ─────────────────────────────────────── */
+        .card-list { gap: 8px; }
+        .tcard { padding: 9px 12px 9px 15px; border-radius: 14px; }
+        .tcard::before { top: 8px; bottom: 8px; width: 3px; }
+        .tcard-title { font-size: 0.9rem; line-height: 1.28; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .tcard-row { gap: 8px; }
+        .tcard-row .status-pill { font-size: 0.68rem; padding: 2px 8px; }
+        .tcard-body { margin-top: 6px; gap: 4px 10px; }
+        .tcard-chips { gap: 4px; }
+        .tcard .chip { padding: 1px 8px; font-size: 0.7rem; }
+        .tcard-due { font-size: 0.78rem; }
+        .tcard-actions .btn-icon { width: 30px; height: 30px; min-width: 30px; }
+        .tcard-actions .btn-icon svg { width: 15px; height: 15px; }
+        html[data-shell="mobile"] .tcard-body .tcard-foot { padding-top: 6px; }
+        html[data-shell="desktop"] body[data-view="cards"] .card-list {
+            display: grid !important; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; align-items: stretch;
+        }
+
+        /* ── CONFIG (desktop): all sections at once, flowing in columns ──
+           No more one-panel-at-a-time with empty space beside it. The
+           section list becomes a one-line jump bar. */
+        html[data-shell="desktop"] #configTab .sheet-stats { gap: 10px; margin-bottom: 12px; }
+        html[data-shell="desktop"] #configTab .sheet-stat { padding: 8px 12px; display: flex; align-items: baseline; justify-content: center; gap: 10px; }
+        html[data-shell="desktop"] #configTab .sheet-stat b { display: inline; font-size: 1.25rem; }
+        html[data-shell="desktop"] .cfg-shell { flex-direction: column; gap: 12px; }
+        html[data-shell="desktop"] .cfg-nav {
+            flex: 0 0 auto; width: 100%; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 5px;
+            position: sticky; top: 0; z-index: 20;
+        }
+        html[data-shell="desktop"] .cfg-nav-item { padding: 7px 11px; font-size: 0.8rem; gap: 6px; }
+        html[data-shell="desktop"] .cfg-nav-chevron { display: none; }
+        html[data-shell="desktop"] .cfg-nav-item.active { background: var(--fill); color: var(--label); }
+        html[data-shell="desktop"] .cfg-panels {
+            width: 100%; background: none; border: 0; box-shadow: none; overflow: visible;
+            columns: 3 400px; column-gap: 14px;
+        }
+        html[data-shell="desktop"] .cfg-panel {
+            display: block !important; break-inside: avoid; margin: 0 0 14px; padding: 16px;
+            border-radius: 18px; background: var(--glass-bg); border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-shadow-sm), var(--glass-inset);
+        }
+        html[data-shell="desktop"] .cfg-panel .dash-title { margin-bottom: 8px; font-size: 0.95rem; }
+        html[data-shell="desktop"] .cfg-panel.flash { box-shadow: 0 0 0 3px var(--accent), var(--glass-shadow-sm); transition: box-shadow 0.3s; }
+        html[data-shell="desktop"] .cfg-back-btn { display: none !important; }
         .layout-pick { margin-bottom: 18px; }
         .layout-pick-lbl { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--label-2); margin-bottom: 8px; }
         .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 14px; background: var(--fill); border: 1px solid var(--glass-border-subtle); }
@@ -1494,6 +1596,29 @@
         .sec-actions .btn-modal { flex: 1 1 140px; height: 44px; }
         .sec-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 0.88rem; font-weight: 600; color: var(--label); }
         .sec-toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
+
+        /* ── ENTRY FORM: 4 per row on desktop, 2 on phones ─────────────── */
+        .entry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; align-items: start; }
+        .entry-grid .c-full, .entry-grid .sub-rule-fields:not(:empty) { grid-column: 1 / -1; }
+        .entry-grid .c-half { grid-column: span 2; }
+        .entry-grid .c-contents { display: contents; }
+        .entry-grid .c-contents[style*="none"] { display: none !important; }
+        .entry-grid .sub-rule-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; }
+        .entry-grid .sub-rule-fields:empty { display: none; }
+        .entry-grid .pair .dt-pair { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 6px; }
+        .entry-grid textarea { min-height: 70px; }
+        /* Notes spans the full row until a Generated Narration sits beside it */
+        .entry-grid #narrationPreviewGroup[style*="none"] ~ .c-grow { grid-column: span 2; }
+        html[data-shell="desktop"] #taskModal .modal-content { max-width: min(1180px, 96vw); padding: 18px 22px; }
+        html[data-shell="desktop"] #taskModal .modal-header { margin-bottom: 10px; }
+        html[data-shell="desktop"] .task-form-compact .form-group label { margin-bottom: 4px; }
+        html[data-shell="desktop"] .task-form-compact .form-group input,
+        html[data-shell="desktop"] .task-form-compact .form-group select { padding: 8px 11px; height: 40px; }
+        html[data-shell="desktop"] .task-form-compact .modal-buttons { margin-top: 14px; }
+        @media (max-width: 900px) { html[data-shell="desktop"] .entry-grid, html[data-shell="desktop"] .entry-grid .sub-rule-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        html[data-shell="mobile"] .entry-grid, html[data-shell="mobile"] .entry-grid .sub-rule-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        html[data-shell="mobile"] .entry-grid .pair, html[data-shell="mobile"] .entry-grid .c-half { grid-column: 1 / -1; }
+        @media (max-width: 340px) { .entry-grid, .entry-grid .sub-rule-fields { grid-template-columns: 1fr !important; } .entry-grid .c-half { grid-column: auto; } }
     </style>
 </head>
 <body>
@@ -1647,6 +1772,11 @@
                         <option value="NoDue">No due date</option>
                     </select>
                 </div>
+                <div class="filter-panel-actions mobile-only">
+                    <button type="button" class="fp-action-btn" onclick="app.closeAllFilterPanels(); app.toggleSelectMode()">☑ Select entries</button>
+                    <button type="button" class="fp-action-btn" onclick="app.closeAllFilterPanels(); app.openEmailModal()">📧 From mail</button>
+                    <button type="button" class="fp-action-btn danger" onclick="app.clearFilters()">🚫 Clear filters</button>
+                </div>
             </div>
         </div>
 
@@ -1755,6 +1885,10 @@
                         <div class="ms-header" onclick="app.toggleDropdown('ms-category-completed')">All Categories</div>
                         <div class="ms-options" id="filterCategoryCompletedOpts"></div>
                     </div>
+                <div class="filter-panel-actions mobile-only">
+                    <button type="button" class="fp-action-btn" onclick="app.closeAllFilterPanels(); app.toggleSelectMode()">☑ Select entries</button>
+                    <button type="button" class="fp-action-btn danger" onclick="app.clearFilters()">🚫 Clear filters</button>
+                </div>
                 </div>
             </div>
         </div>
@@ -2008,8 +2142,8 @@
                 <button class="modal-close" onclick="app.closeTaskModal()">✕</button>
             </div>
             <form id="taskForm" class="task-form-compact" autocomplete="off" onsubmit="app.saveTask(event)">
-                <div class="form-grid-2">
-                    <div class="form-group span-2">
+                <div class="entry-grid">
+                    <div class="form-group c-full">
                         <label>Task Description</label>
                         <input autocomplete="off" type="text" id="taskDescription" required placeholder="e.g. Follow up on LC opening">
                     </div>
@@ -2031,58 +2165,10 @@
                         <select id="taskPendingWith"><option value="">Select person</option></select>
                     </div>
 
-                    <div class="form-group span-2" id="subCategoryField" style="display:none;">
-                        <label>Sub Category <a href="#" class="edit-options-btn" onclick="app.openSubCategoryRules(); return false;">Manage rules</a></label>
+                    <div class="form-group" id="subCategoryField" style="display:none;">
+                        <label>Sub Category <a href="#" class="edit-options-btn" onclick="app.openSubCategoryRules(); return false;">Rules</a></label>
                         <select id="taskSubCategory" onchange="app.renderSubCategoryFields()"><option value="">Select Sub Category</option></select>
-                        <div id="subCategoryRuleFields" class="form-grid-2 nested" style="margin-top:10px;"></div>
                     </div>
-
-                    <div class="span-2" id="importInProgressFields" style="display:none;">
-                        <div class="form-grid-3">
-                            <div class="form-group">
-                                <label>Payment %</label>
-                                <input autocomplete="off" type="number" id="pdPaymentPercent" min="0" max="100" placeholder="e.g. 30">
-                            </div>
-                            <div class="form-group">
-                                <label>Payment Type</label>
-                                <select id="pdPaymentType">
-                                    <option value="">Select</option>
-                                    <option value="Advance">Advance</option>
-                                    <option value="Balance">Balance</option>
-                                    <option value="Remaining Balance">Remaining Balance</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Payment Against</label>
-                                <select id="pdPaymentAgainst">
-                                    <option value="">Select</option>
-                                    <option value="Before Dispatch">Before Dispatch</option>
-                                    <option value="Before Production">Before Production</option>
-                                    <option value="Against BOE">Against BOE</option>
-                                    <option value="Against BL">Against BL</option>
-                                    <option value="Against CI">Against CI</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group pair">
-                        <label style="color:var(--accent);">Due Date &amp; Time</label>
-                        <div class="dt-pair">
-                            <input autocomplete="off" type="date" id="taskDueDate" onchange="app.checkDueHoliday(); app.checkSlotAvailability()">
-                            <input autocomplete="off" type="time" id="taskDueTime" onchange="app.checkSlotAvailability()">
-                        </div>
-                        <div class="due-hint" id="dueHolidayHint"></div>
-                        <div class="due-hint" id="dueSlotHint"></div>
-                    </div>
-                    <div class="form-group pair">
-                        <label>Deadline <span class="lbl-note">(optional · alerted once crossed)</span></label>
-                        <div class="dt-pair">
-                            <input autocomplete="off" type="date" id="taskDeadlineDate">
-                            <input autocomplete="off" type="time" id="taskDeadlineTime">
-                        </div>
-                    </div>
-
                     <div class="form-group">
                         <label>Mail Chain / Reference</label>
                         <div class="input-copy">
@@ -2099,47 +2185,92 @@
                             <option value="Monthly">Monthly</option>
                         </select>
                     </div>
+                    <div class="form-group pair">
+                        <label style="color:var(--accent);">Due Date &amp; Time</label>
+                        <div class="dt-pair">
+                            <input autocomplete="off" type="date" id="taskDueDate" onchange="app.checkDueHoliday(); app.checkSlotAvailability()">
+                            <input autocomplete="off" type="time" id="taskDueTime" onchange="app.checkSlotAvailability()">
+                        </div>
+                        <div class="due-hint" id="dueHolidayHint"></div>
+                        <div class="due-hint" id="dueSlotHint"></div>
+                    </div>
+                    <div class="form-group pair">
+                        <label>Deadline <span class="lbl-note">(optional)</span></label>
+                        <div class="dt-pair">
+                            <input autocomplete="off" type="date" id="taskDeadlineDate">
+                            <input autocomplete="off" type="time" id="taskDeadlineTime">
+                        </div>
+                    </div>
 
-                    <div class="form-group span-2" id="tallyNarrationBox" style="display:none;">
-                        <label>Tally Narration <a href="#" class="edit-options-btn" onclick="app.openNarrationRules(); return false;">Manage types</a></label>
-                        <select id="taskNarrationType" onchange="app.onNarrationTypeChange()"><option value="">— Not a payment / skip —</option></select>
-                        <div id="narrationFieldsWrap" style="display:none; margin-top:10px;">
-                            <div class="form-grid-2 nested">
-                                <div class="form-group" id="narrationPercentGroup" style="display:none;">
-                                    <label>%</label>
-                                    <input autocomplete="off" type="number" min="0" max="100" id="narrationPercent" placeholder="e.g. 100" oninput="app.updateNarrationPreview()">
-                                </div>
-                                <div class="form-group">
-                                    <label id="narrationDocLabel">Document No</label>
-                                    <input autocomplete="off" type="text" id="narrationDocNo" placeholder="e.g. INPO/PP/26-27/0156" oninput="app.updateNarrationPreview()">
-                                </div>
-                                <div id="narrationExtraFieldsWrap" class="span-2 form-grid-2 nested"></div>
-                                <div class="form-group span-2">
-                                    <label>Purpose / Note <span class="lbl-note">(optional)</span></label>
-                                    <div class="input-copy">
-                                        <input autocomplete="off" type="text" id="narrationPurpose" placeholder="e.g. After TDS of 10%" oninput="app.updateNarrationPreview()">
-                                        <button type="button" class="in-copy" onclick="app.copyField('narrationPurpose', this)" title="Copy purpose" aria-label="Copy purpose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
-                                    </div>
-                                </div>
-                                <div class="form-group span-2">
-                                    <label>Generated Narration</label>
-                                    <div class="input-copy is-area">
-                                        <textarea id="narrationPreview" readonly style="min-height:64px;"></textarea>
-                                        <button type="button" class="in-copy" onclick="app.copyField('narrationPreview', this)" title="Copy narration" aria-label="Copy narration"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
-                                    </div>
+                    <div id="subCategoryRuleFields" class="sub-rule-fields"></div>
+
+                    <div class="c-contents" id="importInProgressFields" style="display:none;">
+                        <div class="form-group">
+                            <label>Payment %</label>
+                            <input autocomplete="off" type="number" id="pdPaymentPercent" min="0" max="100" placeholder="e.g. 30">
+                        </div>
+                        <div class="form-group">
+                            <label>Payment Type</label>
+                            <select id="pdPaymentType">
+                                    <option value="">Select</option>
+                                    <option value="Advance">Advance</option>
+                                    <option value="Balance">Balance</option>
+                                    <option value="Remaining Balance">Remaining Balance</option>
+                                </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Payment Against</label>
+                            <select id="pdPaymentAgainst">
+                                    <option value="">Select</option>
+                                    <option value="Before Dispatch">Before Dispatch</option>
+                                    <option value="Before Production">Before Production</option>
+                                    <option value="Against BOE">Against BOE</option>
+                                    <option value="Against BL">Against BL</option>
+                                    <option value="Against CI">Against CI</option>
+                                </select>
+                        </div>
+                    </div>
+
+                    <div class="c-contents" id="tallyNarrationBox" style="display:none;">
+                        <div class="form-group">
+                            <label>Tally Narration <a href="#" class="edit-options-btn" onclick="app.openNarrationRules(); return false;">Types</a></label>
+                            <select id="taskNarrationType" onchange="app.onNarrationTypeChange()"><option value="">— Not a payment / skip —</option></select>
+                        </div>
+                        <div class="c-contents" id="narrationFieldsWrap" style="display:none;">
+                            <div class="form-group" id="narrationPercentGroup" style="display:none;">
+                                <label>%</label>
+                                <input autocomplete="off" type="number" min="0" max="100" id="narrationPercent" placeholder="e.g. 100" oninput="app.updateNarrationPreview()">
+                            </div>
+                            <div class="form-group">
+                                <label id="narrationDocLabel">Document No</label>
+                                <input autocomplete="off" type="text" id="narrationDocNo" placeholder="e.g. INPO/PP/26-27/0156" oninput="app.updateNarrationPreview()">
+                            </div>
+                            <div id="narrationExtraFieldsWrap" class="c-contents"></div>
+                            <div class="form-group">
+                                <label>Purpose / Note</label>
+                                <div class="input-copy">
+                                    <input autocomplete="off" type="text" id="narrationPurpose" placeholder="e.g. After TDS of 10%" oninput="app.updateNarrationPreview()">
+                                    <button type="button" class="in-copy" onclick="app.copyField('narrationPurpose', this)" title="Copy purpose" aria-label="Copy purpose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group c-half" id="narrationPreviewGroup" style="display:none;">
+                        <label>Generated Narration</label>
+                        <div class="input-copy is-area">
+                            <textarea id="narrationPreview" readonly></textarea>
+                            <button type="button" class="in-copy" onclick="app.copyField('narrationPreview', this)" title="Copy narration" aria-label="Copy narration"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                        </div>
+                    </div>
+                    <div class="form-group c-half c-grow">
                         <label>Notes</label>
                         <textarea autocomplete="off" id="taskNotes" placeholder="Additional notes or context..."></textarea>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group c-half">
                         <label style="display:flex; align-items:center; justify-content:space-between;">
                             <span>Key Points <span class="lbl-note">(feeds AI report)</span></span>
-                            <button type="button" class="fp-action-btn" style="flex:0 0 auto; padding:4px 10px;" onclick="app.addKeyPointRow()">+ Add</button>
+                            <button type="button" class="fp-action-btn" style="flex:0 0 auto; padding:3px 10px;" onclick="app.addKeyPointRow()">+ Add</button>
                         </label>
                         <div id="taskKeyPoints"></div>
                     </div>
@@ -2389,6 +2520,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="./app.js?v=66"></script>
+    <script src="./app.js?v=67"></script>
 </body>
 </html>
