@@ -2,354 +2,752 @@
 <html lang="en" data-theme="pearl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#e2e8f2">
-    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-    <meta name="description" content="Track banking follow-ups, payment deadlines and mail chains.">
-    <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="icon" href="./favicon.png" sizes="64x64" type="image/png">
-    <link rel="apple-touch-icon" href="./apple-touch-icon.png">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <title>Banking Work Tracker — Web Application Dashboard</title>
-    <script>
-        (function () {
-            try {
-                var t = localStorage.getItem('pureEnergyTheme');
-                if (t) document.documentElement.setAttribute('data-theme', t);
-                var sizes = { small: '87.5%', default: '100%', large: '112.5%', xlarge: '125%' };
-                var ts = localStorage.getItem('pureEnergyTextSize');
-                if (ts && sizes[ts]) document.documentElement.style.fontSize = sizes[ts];
-            } catch (e) {}
-            window.__bootAt = Date.now();
-
-            window.__shell = function () {
-                var w = window.innerWidth || document.documentElement.clientWidth || 1024;
-                var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-                if (w <= 900) return 'mobile';
-                if (coarse && w <= 1180) return 'mobile';
-                return 'desktop';
-            };
-            document.documentElement.setAttribute('data-shell', window.__shell());
-        })();
-    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Banking Work Tracker</title>
+    <link rel="manifest" href="./manifest.json">
+    <meta name="theme-color" content="#f2f2f7">
     <style>
-        /* =========================================================
-           Banking Work Tracker — iOS Glassy Finish UI
-           ========================================================= */
-
-        /* ── THEME 1: Pearl (iOS Default) ──────────────────────── */
-        :root, html[data-theme="pearl"] {
-            --canvas-bg: linear-gradient(145deg, #e8edf5 0%, #dce4f0 40%, #e4dff5 100%);
-            --canvas-solid: #e2e8f2;
-
-            --glass-bg:        rgba(255, 255, 255, 0.62);
-            --glass-bg-hover:  rgba(255, 255, 255, 0.82);
-            --glass-header-bg: rgba(242, 242, 247, 0.78);
-            --glass-th-bg:     rgba(248, 248, 252, 0.92);
-            --glass-modal-bg:  rgba(255, 255, 255, 0.72);
-            --glass-border:    rgba(255, 255, 255, 0.55);
-            --glass-border-subtle: rgba(255, 255, 255, 0.45);
-            --glass-specular:  rgba(255, 255, 255, 0.80);
-            --glass-shadow:    0 8px 40px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0,0,0,0.04);
-            --glass-shadow-sm: 0 4px 20px rgba(0, 0, 0, 0.05);
-            --glass-inset:     inset 0 1px 0 rgba(255,255,255,0.8);
-
-            /* WCAG AA Compliant: 4.6:1 contrast ratio */
-            --label: #1c1c1e; --label-2: #8e8e93; --label-3: #636366;
-            --separator: rgba(60,60,67,0.1); --line: rgba(60,60,67,0.1); --line-strong: rgba(60,60,67,0.18);
-            --fill: rgba(120,120,128,0.08); --fill-2: rgba(120,120,128,0.14);
-            --input-bg: rgba(255,255,255,0.7);
-            --accent: #007aff; --blue: #007aff; --blue-ink: #0055cc;
-            --red: #ff3b30; --red-ink: #c9000a; --green: #34c759; --green-ink: #1a7d33;
-            --amber: #ff9500; --amber-ink: #8f4a00; --violet: #af52de; --violet-ink: #6e2a9e;
-            --slate: #8e8e93; color-scheme: light;
-        }
-
-        /* ── THEME 2: Glassmorphism ──────────────────────────────── */
-        html[data-theme="glass"] {
-            --canvas-bg: linear-gradient(135deg, #a8c8ff 0%, #c9b6ff 35%, #ffc2e8 70%, #a5f0e4 100%);
-            --canvas-solid: #bfc9f5;
-
-            --glass-bg:        rgba(255, 255, 255, 0.34);
-            --glass-bg-hover:  rgba(255, 255, 255, 0.52);
-            --glass-header-bg: rgba(255, 255, 255, 0.42);
-            --glass-th-bg:     rgba(255, 255, 255, 0.68);
-            --glass-modal-bg:  rgba(255, 255, 255, 0.46);
-            --glass-border:    rgba(255, 255, 255, 0.62);
-            --glass-border-subtle: rgba(255, 255, 255, 0.42);
-            --glass-specular:  rgba(255, 255, 255, 0.92);
-            --glass-shadow:    0 12px 44px rgba(49, 46, 129, 0.18), 0 2px 10px rgba(49, 46, 129, 0.08);
-            --glass-shadow-sm: 0 6px 22px rgba(49, 46, 129, 0.12);
-            --glass-inset:     inset 0 1px 0 rgba(255,255,255,0.95);
-
-            --label: #1e1b4b; --label-2: #4c469c; --label-3: #8b87c9;
-            --separator: rgba(49,46,129,0.14); --line: rgba(255,255,255,0.45); --line-strong: rgba(255,255,255,0.7);
-            --fill: rgba(255,255,255,0.26); --fill-2: rgba(255,255,255,0.42);
-            --input-bg: rgba(255,255,255,0.46);
-            --accent: #4f46e5; --blue: #2563eb; --blue-ink: #3730a3;
-            --red: #f43f5e; --red-ink: #9f1239; --green: #10b981; --green-ink: #065f46;
-            --amber: #f59e0b; --amber-ink: #92400e; --violet: #8b5cf6; --violet-ink: #5b21b6;
-            --slate: #4c469c; color-scheme: light;
-        }
-        html[data-theme="glass"] .stat-tile, html[data-theme="glass"] .appbar,
-        html[data-theme="glass"] .cfg-section, html[data-theme="glass"] .mini-tile,
-        html[data-theme="glass"] .single-line-toolbar, html[data-theme="glass"] .tabbar,
-        html[data-theme="glass"] .modal-content, html[data-theme="glass"] .ms-options,
-        html[data-theme="glass"] .table-container, html[data-theme="glass"] .tcard {
-            backdrop-filter: saturate(200%) blur(40px) !important;
-            -webkit-backdrop-filter: saturate(200%) blur(40px) !important;
-        }
-
-        /* ── THEME 3: Neumorphism (Soft UI) ──────────────────────── */
-        html[data-theme="neuo"] {
-            --canvas-bg: linear-gradient(145deg, #e8edf4 0%, #e2e8f0 100%);
-            --canvas-solid: #e6ebf2;
-
-            --glass-bg:        #e9eef5;
-            --glass-bg-hover:  #eef2f8;
-            --glass-header-bg: #e9eef5;
-            --glass-th-bg:     #e4eaf2;
-            --glass-modal-bg:  #e9eef5;
-            --glass-border:    transparent;
-            --glass-border-subtle: transparent;
-            --glass-specular:  transparent;
-            --glass-shadow:    8px 8px 18px rgba(163,177,198,0.55), -8px -8px 18px rgba(255,255,255,0.95);
-            --glass-shadow-sm: 5px 5px 12px rgba(163,177,198,0.45), -5px -5px 12px rgba(255,255,255,0.9);
-            --glass-inset:     inset 0 0 0 1px rgba(255,255,255,0.35);
-
-            /* WCAG AA Compliant: 4.5:1 contrast ratio */
-            --label: #2d3a4e; --label-2: #7688a1; --label-3: #55657d;
-            --separator: rgba(163,177,198,0.35); --line: rgba(163,177,198,0.4); --line-strong: rgba(163,177,198,0.6);
-            --fill: rgba(163,177,198,0.16); --fill-2: rgba(163,177,198,0.3);
-            --input-bg: #e4eaf2;
-            --accent: #5b7cfa; --blue: #5b7cfa; --blue-ink: #3a55c9;
-            --red: #f4736b; --red-ink: #c0392b; --green: #4fc38a; --green-ink: #2a8259;
-            --amber: #f0a441; --amber-ink: #a9661a; --violet: #9b7ff0; --violet-ink: #6b4ec2;
-            --slate: #7688a1; color-scheme: light;
-        }
-        html[data-theme="neuo"] .stat-tile, html[data-theme="neuo"] .appbar,
-        html[data-theme="neuo"] .cfg-section, html[data-theme="neuo"] .mini-tile,
-        html[data-theme="neuo"] .single-line-toolbar, html[data-theme="neuo"] .tabbar,
-        html[data-theme="neuo"] .modal-content, html[data-theme="neuo"] .ms-options,
-        html[data-theme="neuo"] .table-container, html[data-theme="neuo"] .tcard {
-            backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
-        }
-        html[data-theme="neuo"] .btn-icon,
-        html[data-theme="neuo"] .filter-input,
-        html[data-theme="neuo"] .filter-select,
-        html[data-theme="neuo"] .ms-header {
-            border: none;
-            box-shadow: 4px 4px 9px rgba(163,177,198,0.45), -4px -4px 9px rgba(255,255,255,0.92);
-        }
-        html[data-theme="neuo"] .btn-icon:active,
-        html[data-theme="neuo"] .filter-input:focus,
-        html[data-theme="neuo"] .filter-select:focus {
-            box-shadow: inset 4px 4px 9px rgba(163,177,198,0.5), inset -4px -4px 9px rgba(255,255,255,0.92);
-        }
-        html[data-theme="neuo"] td, html[data-theme="neuo"] th { background: transparent !important; }
-        html[data-theme="neuo"] tbody tr:hover td { background: rgba(255,255,255,0.45) !important; }
-
-        /* ── THEME 4: Claymorphism (Soft 3D) ─────────────────────── */
-        html[data-theme="clay"] {
-            --canvas-bg: linear-gradient(145deg, #e3e9ff 0%, #f0e6ff 45%, #dff0ff 100%);
-            --canvas-solid: #e7ecff;
-
-            --glass-bg:        rgba(255, 255, 255, 0.78);
-            --glass-bg-hover:  rgba(255, 255, 255, 0.92);
-            --glass-header-bg: rgba(255, 255, 255, 0.82);
-            --glass-th-bg:     rgba(250, 249, 255, 0.95);
-            --glass-modal-bg:  rgba(255, 255, 255, 0.86);
-            --glass-border:    rgba(255, 255, 255, 0.85);
-            --glass-border-subtle: rgba(255, 255, 255, 0.6);
-            --glass-specular:  rgba(255, 255, 255, 0.95);
-            --glass-shadow:    0 18px 34px rgba(109, 92, 214, 0.20), 0 6px 12px rgba(109, 92, 214, 0.12);
-            --glass-shadow-sm: 0 12px 24px rgba(109, 92, 214, 0.16);
-            --glass-inset:     inset 0 -8px 14px rgba(139, 92, 246, 0.14), inset 0 8px 12px rgba(255, 255, 255, 0.95);
-
-            --label: #312152; --label-2: #7a6aa8; --label-3: #756799;
-            --separator: rgba(109,92,214,0.14); --line: rgba(109,92,214,0.16); --line-strong: rgba(109,92,214,0.26);
-            --fill: rgba(139,92,246,0.08); --fill-2: rgba(139,92,246,0.16);
-            --input-bg: rgba(255,255,255,0.8);
-            --accent: #7c5cf0; --blue: #5b8def; --blue-ink: #3b5bc9;
-            --red: #fb7185; --red-ink: #be123c; --green: #4ade80; --green-ink: #15803d;
-            --amber: #fbbf24; --amber-ink: #b45309; --violet: #a78bfa; --violet-ink: #6d28d9;
-            --slate: #7a6aa8; color-scheme: light;
-        }
-        html[data-theme="clay"] .stat-tile,
-        html[data-theme="clay"] .mini-tile,
-        html[data-theme="clay"] .cfg-section,
-        html[data-theme="clay"] .tcard,
-        html[data-theme="clay"] .table-container,
-        html[data-theme="clay"] .single-line-toolbar,
-        html[data-theme="clay"] .empty-state { border-radius: 32px; }
-        html[data-theme="clay"] .btn-icon,
-        html[data-theme="clay"] .filter-input,
-        html[data-theme="clay"] .filter-select,
-        html[data-theme="clay"] .ms-header,
-        html[data-theme="clay"] .btn-modal { border-radius: 18px; }
-        html[data-theme="clay"] .appbar-mark { border-radius: 16px; }
-
-        /* ── THEME 5: The 3D Hero Object ─────────────────────────── */
-        html[data-theme="hero3d"] {
-            --canvas-bg: radial-gradient(1100px 620px at 18% -8%, #3b2a7a 0%, transparent 58%),
-                         radial-gradient(950px 560px at 92% 8%, #0e5e6e 0%, transparent 55%),
-                         linear-gradient(160deg, #0d1020 0%, #141936 55%, #0a0d1c 100%);
-            --canvas-solid: #10142a;
-
-            --glass-bg:        rgba(36, 41, 74, 0.60);
-            --glass-bg-hover:  rgba(48, 54, 94, 0.78);
-            --glass-header-bg: rgba(20, 25, 52, 0.82);
-            --glass-th-bg:     rgba(26, 31, 60, 0.95);
-            --glass-modal-bg:  rgba(28, 33, 64, 0.86);
-            --glass-border:    rgba(148, 163, 255, 0.20);
-            --glass-border-subtle: rgba(148, 163, 255, 0.13);
-            --glass-specular:  rgba(190, 200, 255, 0.35);
-            --glass-shadow:    0 26px 60px rgba(0, 0, 0, 0.55), 0 8px 20px rgba(79, 70, 229, 0.28);
-            --glass-shadow-sm: 0 14px 34px rgba(0, 0, 0, 0.45);
-            --glass-inset:     inset 0 1px 0 rgba(190, 200, 255, 0.22);
-
-            --label: #eef1ff; --label-2: #a9b2e0; --label-3: #8a96c7;
-            --separator: rgba(148,163,255,0.16); --line: rgba(148,163,255,0.18); --line-strong: rgba(148,163,255,0.32);
-            --fill: rgba(148,163,255,0.11); --fill-2: rgba(148,163,255,0.20);
-            --input-bg: rgba(16, 20, 44, 0.72);
-            --accent: #818cf8; --blue: #60a5fa; --blue-ink: #bfdbfe;
-            --red: #fb7185; --red-ink: #fecdd3; --green: #34d399; --green-ink: #a7f3d0;
-            --amber: #fbbf24; --amber-ink: #fde68a; --violet: #c084fc; --violet-ink: #e9d5ff;
-            --slate: #8b95c9; color-scheme: dark;
-        }
-        html[data-theme="hero3d"] .toast { color: #0d1020; background: #dfe4ff; }
-        html[data-theme="hero3d"] .toast-action { color: #312e81; background: rgba(49,46,129,0.12); border-color: rgba(49,46,129,0.3); }
-        html[data-theme="hero3d"] .appbar-mark {
-            background: linear-gradient(150deg, #a5b4fc 0%, #6366f1 46%, #3730a3 100%);
-            box-shadow: 0 12px 26px rgba(67, 56, 202, 0.6),
-                        inset 0 2px 3px rgba(255,255,255,0.55),
-                        inset 0 -3px 6px rgba(30, 27, 75, 0.6);
-        }
-        html[data-theme="hero3d"] .boot-tile { filter: drop-shadow(0 22px 46px rgba(99, 102, 241, 0.55)); }
-
-        /* ── GLOBAL BLUR MIXIN ──────────────────────────────────── */
-        .stat-tile, .appbar, .cfg-section, .mini-tile,
-        .single-line-toolbar, .tabbar, .modal-content,
-        .ms-options, .table-container {
-            backdrop-filter: saturate(180%) blur(28px);
-            -webkit-backdrop-filter: saturate(180%) blur(28px);
-        }
-
-        /* ── ROOT CONSTANTS ─────────────────────────────────────── */
         :root {
-            --appbar-h: 64px;
-            --tabbar-h: 64px;
-            --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-            --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            --font-main: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
-            --font-num: "SF Pro Display", "Inter", -apple-system, system-ui, sans-serif;
+            --bg: #f2f2f7;
+            --fill: rgba(0, 0, 0, 0.04);
+            --fill-2: rgba(0, 0, 0, 0.08);
+            --line: rgba(0, 0, 0, 0.12);
+            --line-strong: rgba(0, 0, 0, 0.2);
+            --label: #1c1c1e;
+            --label-2: #8e8e93;
+            --accent: #007aff;
+            --red: #ff3b30;
+            --green: #34c759;
+            --glass-modal-bg: rgba(255, 255, 255, 0.95);
+            --glass-border: rgba(255, 255, 255, 0.4);
+            --input-bg: #ffffff;
         }
-
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-main); -webkit-tap-highlight-color: transparent; }
-        html, body { height: 100%; height: 100dvh; overflow: hidden; -webkit-text-size-adjust: 100%; }
+        [data-theme="hero3d"] {
+            --bg: #10142a;
+            --fill: rgba(255, 255, 255, 0.06);
+            --fill-2: rgba(255, 255, 255, 0.12);
+            --line: rgba(255, 255, 255, 0.12);
+            --line-strong: rgba(255, 255, 255, 0.24);
+            --label: #ffffff;
+            --label-2: #a1a1aa;
+            --glass-modal-bg: rgba(20, 24, 45, 0.96);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --input-bg: #181d38;
+        }
 
         body {
-            display: flex; flex-direction: column;
-            background: var(--canvas-bg); color: var(--label);
-            font-size: 14px; line-height: 1.45;
-            font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--label);
+            overflow-x: hidden;
+            transition: filter 0.2s ease;
         }
 
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 10px; }
-
-        /* Keyboard Accessibility: High-Visibility Focus Outline */
-        :focus-visible {
-            outline: 2px solid var(--accent) !important;
-            outline-offset: 2px !important;
-        }
-        .tabbar-btn:focus-visible,
-        .stat-tile:focus-visible,
-        .mini-tile:focus-visible,
-        .btn-icon:focus-visible,
-        .btn-modal:focus-visible {
-            outline: 2px solid var(--accent) !important;
-            outline-offset: 2px !important;
+        body.privacy-obscured {
+            filter: blur(28px) brightness(0.7);
+            pointer-events: none;
+            user-select: none;
         }
 
-        /* ── APP BAR ─────────────────────────────────────────────── */
-        .appbar {
-            order: -2; flex-shrink: 0; z-index: 60;
-            display: flex; align-items: center; justify-content: space-between; gap: 14px;
-            height: var(--appbar-h); padding: 0 32px;
-            background: var(--glass-header-bg);
-            border-bottom: 1px solid var(--glass-border);
-            box-shadow: var(--glass-inset), 0 1px 0 var(--line), 0 4px 20px rgba(0,0,0,0.04);
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 18px;
+            background: var(--glass-modal-bg);
+            border-bottom: 1px solid var(--line);
         }
-        .appbar-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
-        .appbar-mark {
-            flex-shrink: 0; width: 34px; height: 34px; display: grid; place-items: center;
-            background: var(--accent); border-radius: 9px; color: #fff;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25);
-        }
-        .appbar-mark.busy svg { animation: spin 1s linear infinite; }
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-        .appbar-mark svg { width: 18px; height: 18px; stroke: #fff; }
-        .appbar-title { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.015em;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .appbar-sub { font-size: 0.8rem; color: var(--label-2); font-weight: 500;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .appbar-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-        .appbar-left > div { min-width: 0; }
+        .header-title { font-size: 1.1rem; font-weight: 800; }
+        .header-info { display: flex; align-items: center; gap: 12px; font-size: 0.8rem; color: var(--label-2); }
+        .save-indicator { display: flex; align-items: center; gap: 6px; }
+        .save-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
 
-        .autosave {
-            display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px;
-            font-size: 0.75rem; font-weight: 600; color: var(--label-2);
-            background: var(--fill); border: 1px solid var(--glass-border-subtle);
-            border-radius: 20px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-        }
-        .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
-
-        /* ── SEGMENTED TABS (desktop) ────────────────────────────── */
-        .tabbar {
-            display: flex; align-items: center; gap: 4px; padding: 4px;
+        .tab-bar {
+            display: flex;
             background: var(--fill);
-            border: 1px solid var(--glass-border-subtle); border-radius: 13px;
-            box-shadow: var(--glass-inset);
+            border-bottom: 1px solid var(--line);
+            padding: 6px 12px;
+            gap: 6px;
+            overflow-x: auto;
         }
-        .tabbar-btn {
-            position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-            height: 36px; padding: 0 18px; font-size: 0.85rem; font-weight: 600; color: var(--label-2);
-            background: transparent; border: none; border-radius: 9px; cursor: pointer; transition: all 0.2s var(--ease);
+        .tab-btn {
+            background: transparent;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--label-2);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
         }
-        .tabbar-btn:hover { color: var(--label); background: var(--fill-2); }
-        .tabbar-btn.active {
-            color: var(--accent); background: var(--glass-bg);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08), var(--glass-inset); font-weight: 700;
+        .tab-btn.active {
+            background: var(--input-bg);
+            color: var(--accent);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
         }
-        .tabbar-ico { display: none; }
-        .badge {
-            min-width: 18px; height: 18px; padding: 0 5px; font-size: 0.65rem; font-weight: 700;
-            display: inline-flex; align-items: center; justify-content: center; border-radius: 20px;
-            color: var(--label-2); background: var(--fill-2);
+        .tab-badge {
+            background: var(--fill-2);
+            padding: 1px 6px;
+            border-radius: 10px;
+            font-size: 0.72rem;
         }
-        .tabbar-btn.active .badge { background: var(--accent); color: #fff; }
-        .badge.red { color: #fff; background: var(--red); }
 
-        /* ── CONTENT AREA ────────────────────────────────────────── */
-        .content-area {
-            flex: 1 1 auto; min-height: 0; display: none;
-            overflow-y: auto; overflow-x: hidden; padding: 24px 28px 48px;
-            -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain;
-        }
-        .content-area.active { display: block; animation: viewFade 0.25s var(--ease) both; }
-        @keyframes viewFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        main { padding: 16px; max-width: 1100px; margin: 0 auto; }
+        .content-area { display: none; }
+        .content-area.active { display: block; }
 
-        /* ── DASHBOARD GRID ──────────────────────────────────────── */
-        #dashboardTab { --gutter: max(16px, 1vw); }
-        #registerTab, #completedTab, #binTab, #holidaysTab { --gutter: max(16px, 1vw); padding: 18px var(--gutter) 48px; }
-        
-        .dash-controls {
-            display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 24px;
-            padding: 12px 20px;
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border); border-radius: 18px;
-            box-shadow: var(--glass-shadow-sm), 
+        .action-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .search-input {
+            height: 36px;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+            background: var(--input-bg);
+            padding: 0 12px;
+            font-size: 0.85rem;
+            color: var(--label);
+            width: min(280px, 100%);
+            box-sizing: border-box;
+        }
+        .btn-action {
+            height: 36px;
+            padding: 0 14px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--input-bg);
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            font-size: 0.85rem;
+        }
+        .data-table th, .data-table td {
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--line);
+        }
+        .data-table th {
+            background: var(--fill);
+            font-weight: 700;
+            color: var(--label-2);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+        .data-table tr:last-child td { border-bottom: none; }
+
+        .btn-row {
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--line);
+            background: var(--fill);
+            color: var(--label);
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            margin-right: 4px;
+        }
+        .btn-row.ok { background: rgba(52, 199, 89, 0.12); color: var(--green); border-color: transparent; }
+        .btn-row.bad { background: rgba(255, 59, 48, 0.12); color: var(--red); border-color: transparent; }
+
+        /* COMPACT MODAL GRID */
+        #taskModal .modal-content {
+            max-width: 680px;
+            padding: 18px 22px;
+        }
+        .form-grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px 14px;
+        }
+        .col-span-full { grid-column: 1 / -1; }
+        #taskModal .form-group { margin-bottom: 0; }
+        #taskModal .form-group label {
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--label-2);
+            margin-bottom: 3px;
+        }
+        #taskModal input[type="text"],
+        #taskModal input[type="date"],
+        #taskModal input[type="time"],
+        #taskModal input[type="number"],
+        #taskModal select {
+            height: 34px !important;
+            padding: 5px 10px !important;
+            font-size: 0.82rem !important;
+            border-radius: 9px !important;
+            box-sizing: border-box;
+            background: var(--input-bg);
+            color: var(--label);
+            border: 1px solid var(--line);
+            width: 100%;
+        }
+        #taskModal textarea {
+            min-height: 52px !important;
+            padding: 6px 10px !important;
+            font-size: 0.82rem !important;
+            border-radius: 9px !important;
+            box-sizing: border-box;
+            background: var(--input-bg);
+            color: var(--label);
+            border: 1px solid var(--line);
+            width: 100%;
+            resize: vertical;
+        }
+        #taskModal .input-with-copy {
+            position: relative;
+            display: flex;
+            align-items: center;
+            width: 100%;
+        }
+        #taskModal .input-with-copy input {
+            width: 100% !important;
+            padding-right: 36px !important;
+        }
+        .btn-field-copy {
+            position: absolute;
+            right: 5px;
+            width: 24px;
+            height: 24px;
+            display: grid;
+            place-items: center;
+            background: var(--fill);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            color: var(--label-2);
+            cursor: pointer;
+            padding: 0;
+            transition: all 0.15s ease;
+            z-index: 2;
+        }
+        .btn-field-copy svg { width: 12px; height: 12px; pointer-events: none; }
+        .btn-field-copy:hover { background: var(--accent); border-color: var(--accent); color: #fff; transform: scale(1.05); }
+        .btn-field-copy.done { background: var(--green) !important; border-color: var(--green) !important; color: #fff !important; }
+
+        /* PRIVACY LOCK OVERLAY */
+        #privacyLockOverlay {
+            position: fixed; inset: 0; z-index: 999999;
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(15, 23, 42, 0.78);
+            backdrop-filter: blur(32px) saturate(180%);
+            -webkit-backdrop-filter: blur(32px) saturate(180%);
+        }
+        #privacyLockOverlay.active { display: flex; }
+        .lock-box {
+            width: min(340px, calc(100vw - 36px));
+            padding: 28px 24px; text-align: center;
+            background: var(--glass-modal-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 28px;
+            box-shadow: 0 24px 64px rgba(0,0,0,0.35);
+        }
+        .lock-icon-ring {
+            width: 58px; height: 58px; margin: 0 auto 12px;
+            display: grid; place-items: center; border-radius: 50%;
+            background: var(--fill); border: 1px solid var(--line);
+            color: var(--accent); font-size: 1.6rem;
+        }
+        .lock-dots { display: flex; justify-content: center; gap: 14px; margin: 20px 0 24px; }
+        .lock-dot {
+            width: 14px; height: 14px; border-radius: 50%;
+            border: 2px solid var(--line-strong); background: transparent;
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .lock-dot.filled { background: var(--accent); border-color: var(--accent); transform: scale(1.15); box-shadow: 0 0 10px var(--accent); }
+        .pin-keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+        .pin-btn {
+            height: 52px; border-radius: 14px; border: 1px solid var(--line);
+            background: var(--fill); color: var(--label);
+            font-size: 1.3rem; font-weight: 700; cursor: pointer;
+            transition: all 0.15s ease; display: grid; place-items: center;
+        }
+        .pin-btn:hover { background: var(--fill-2); transform: translateY(-1px); }
+        .pin-btn:active { transform: scale(0.92); }
+
+        .modal {
+            position: fixed; inset: 0; z-index: 1000;
+            display: none; align-items: center; justify-content: center;
+            background: rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(8px);
+        }
+        .modal.open { display: flex; }
+        .modal-content {
+            background: var(--glass-modal-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            width: 92%;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; }
+        .modal-close { background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--label-2); }
+        .modal-buttons { display: flex; justify-content: flex-end; gap: 10px; }
+        .btn-modal { padding: 8px 16px; border-radius: 10px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+        .btn-modal.primary { background: var(--accent); color: #fff; }
+        .btn-modal.secondary { background: var(--fill); color: var(--label); border-color: var(--line); }
+
+        #toastContainer {
+            position: fixed; bottom: 20px; right: 20px; z-index: 10000;
+            display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+        }
+        .toast {
+            background: #1c1c1e; color: #fff; padding: 10px 16px; border-radius: 10px;
+            font-size: 0.85rem; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); pointer-events: auto;
+        }
+
+        @media (max-width: 480px) {
+            .form-grid-2 { grid-template-columns: 1fr; gap: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <header id="mainAppHeader">
+        <div class="header-title" id="appMark">Banking Work Tracker</div>
+        <div class="header-info">
+            <span id="headerDate">--</span>
+            <div class="save-indicator" id="saveStatus">
+                <span class="dot"></span>
+                <span>ready</span>
+            </div>
+            <button type="button" class="btn-row" onclick="app.security.lock()" title="Privacy Lock">🔒 Lock</button>
+        </div>
+    </header>
+
+    <nav class="tab-bar" id="tabBar">
+        <button type="button" class="tab-btn active" data-tab="Dashboard" onclick="app.switchTab('Dashboard')">
+            Dashboard
+        </button>
+        <button type="button" class="tab-btn" data-tab="Register" onclick="app.switchTab('Register')">
+            Register <span class="tab-badge" id="badgeRegister">0</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="Completed" onclick="app.switchTab('Completed')">
+            Completed <span class="tab-badge" id="badgeCompletedTab">0</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="Holidays" onclick="app.switchTab('Holidays')">
+            Holidays
+        </button>
+        <button type="button" class="tab-btn" data-tab="Config" onclick="app.switchTab('Config')">
+            Config
+        </button>
+        <button type="button" class="tab-btn" data-tab="Bin" onclick="app.switchTab('Bin')">
+            Bin <span class="tab-badge" id="badgeBinTab">0</span>
+        </button>
+    </nav>
+
+    <main>
+        <!-- DASHBOARD TAB -->
+        <section class="content-area active" id="dashboardTab">
+            <div class="action-bar">
+                <div style="font-size:1.1rem; font-weight:700;">Operational Overview</div>
+                <div>
+                    <button type="button" class="btn-action" onclick="app.openTaskModal()">+ New Task</button>
+                    <button type="button" class="btn-row" onclick="app.openSyncSetup()">Cloud Sync</button>
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:16px;">
+                <div style="background:var(--input-bg); padding:16px; border-radius:14px; border:1px solid var(--line);">
+                    <div style="font-size:0.75rem; font-weight:700; color:var(--label-2); text-transform:uppercase;">Open Tasks</div>
+                    <div style="font-size:1.8rem; font-weight:800; margin-top:6px;" id="entryCount">0</div>
+                </div>
+                <div style="background:var(--input-bg); padding:16px; border-radius:14px; border:1px solid var(--line);">
+                    <div style="font-size:0.75rem; font-weight:700; color:var(--label-2); text-transform:uppercase;">Settled Today</div>
+                    <div style="font-size:1.8rem; font-weight:800; margin-top:6px; color:var(--green);" id="badgeCompleted">0</div>
+                </div>
+                <div style="background:var(--input-bg); padding:16px; border-radius:14px; border:1px solid var(--line);">
+                    <div style="font-size:0.75rem; font-weight:700; color:var(--label-2); text-transform:uppercase;">Bin Queue</div>
+                    <div style="font-size:1.8rem; font-weight:800; margin-top:6px; color:var(--red);" id="badgeBin">0</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- REGISTER TAB -->
+        <section class="content-area" id="registerTab">
+            <div class="action-bar">
+                <input type="text" class="search-input" id="searchInput" placeholder="Search tasks..." oninput="app.debouncedRender()">
+                <div>
+                    <button type="button" class="btn-action" onclick="app.openTaskModal()">+ New Task</button>
+                    <button type="button" class="btn-row" onclick="app.findDuplicates()">Deduplicate</button>
+                    <button type="button" class="btn-row" onclick="app.exportData('csv')">Export CSV</button>
+                </div>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Description / Purpose</th>
+                        <th>Category</th>
+                        <th>Priority</th>
+                        <th>Status</th>
+                        <th>Due Date</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="taskTableBody"></tbody>
+            </table>
+        </section>
+
+        <!-- COMPLETED TAB -->
+        <section class="content-area" id="completedTab">
+            <div class="action-bar">
+                <input type="text" class="search-input" id="searchCompleted" placeholder="Search completed..." oninput="app.debouncedRender()">
+                <button type="button" class="btn-row" onclick="app.resyncCompletedForReport()">Resync for Daily Report</button>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Description / Purpose</th>
+                        <th>Category</th>
+                        <th>Settled Date</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="completedTableBody"></tbody>
+            </table>
+        </section>
+
+        <!-- HOLIDAYS TAB -->
+        <section class="content-area" id="holidaysTab">
+            <div class="action-bar">
+                <input type="text" class="search-input" id="searchHolidays" placeholder="Search calendar..." oninput="app.debouncedRender()">
+                <button type="button" class="btn-action" onclick="app.openHolidayModal()">+ Add Holiday</button>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Holiday Name</th>
+                        <th>Date</th>
+                        <th>Calendar Type</th>
+                        <th>Next Working Day</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="holidaysTableBody"></tbody>
+            </table>
+        </section>
+
+        <!-- CONFIG TAB -->
+        <section class="content-area" id="configTab">
+            <div style="background:var(--input-bg); padding:20px; border-radius:14px; border:1px solid var(--line); max-width:600px;">
+                <h3 style="margin-top:0;">Configuration & Security</h3>
+                <div style="margin-bottom:14px;">
+                    <label style="font-size:0.8rem; font-weight:700; display:block; margin-bottom:4px;">Session Security PIN</label>
+                    <button type="button" class="btn-row" id="pinCfgStatus" onclick="app.security.promptSetPin()">Set PIN</button>
+                    <button type="button" class="btn-row" id="cfgBioBtn" onclick="app.security.toggleBiometrics()">Biometrics</button>
+                </div>
+                <div style="margin-bottom:14px;">
+                    <label style="font-size:0.8rem; font-weight:700; display:block; margin-bottom:4px;">Daily Activity Report Date</label>
+                    <input type="date" id="dailyReportDate" style="height:34px; padding:4px 8px; border-radius:8px; border:1px solid var(--line);">
+                    <button type="button" class="btn-row" onclick="app.generateDailyReport()" style="margin-left:6px;">Generate Report</button>
+                </div>
+                <div id="dailyReportOutput" style="display:none; white-space:pre-wrap; background:var(--fill); padding:12px; border-radius:10px; font-family:monospace; font-size:0.8rem; margin-top:10px;"></div>
+                <div id="dailyReportActions" style="display:none; gap:8px; margin-top:8px;">
+                    <button type="button" class="btn-row ok" onclick="app.copyDailyReport()">Copy Report</button>
+                    <button type="button" class="btn-row" onclick="app.exportDailyReportExcel()">Export Excel</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- BIN TAB -->
+        <section class="content-area" id="binTab">
+            <div class="action-bar">
+                <div style="font-size:0.9rem; color:var(--label-2);">Deleted entries remain here for 30 days before permanent purging.</div>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Description / Purpose</th>
+                        <th>Category</th>
+                        <th>Deleted Date</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="binTableBody"></tbody>
+            </table>
+        </section>
+    </main>
+
+    <div id="toastContainer"></div>
+
+    <!-- TASK MODAL -->
+    <div class="modal" id="taskModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-content">
+            <div class="modal-header" style="margin-bottom: 10px; padding-bottom: 6px;">
+                <h2 id="modalTitle" style="font-size: 1.15rem; margin: 0;">New Entry</h2>
+                <button type="button" class="modal-close" onclick="app.closeTaskModal()" aria-label="Close modal">✕</button>
+            </div>
+
+            <form id="taskForm" onsubmit="app.saveTask(event)">
+                <div class="form-grid-2">
+                    <div class="form-group">
+                        <label for="taskDescription">Purpose / Description <span style="color:var(--red);">*</span></label>
+                        <div class="input-with-copy">
+                            <input type="text" id="taskDescription" placeholder="e.g. Vendor payment" required autocomplete="off">
+                            <button type="button" class="btn-field-copy" onclick="app.copyFieldValue('taskDescription', this)" title="Copy Purpose">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskMailChain">Mail Chain / Reference</label>
+                        <div class="input-with-copy">
+                            <input type="text" id="taskMailChain" placeholder="e.g. RE: LC Payment SBI" autocomplete="off">
+                            <button type="button" class="btn-field-copy" onclick="app.copyFieldValue('taskMailChain', this)" title="Copy Mail Chain">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskCategory">Category</label>
+                        <select id="taskCategory" onchange="app.updateConditionalFields()"></select>
+                    </div>
+
+                    <div class="form-group" id="subCategoryField" style="display:none;">
+                        <label for="taskSubCategory">Sub-Category</label>
+                        <select id="taskSubCategory" onchange="app.renderSubCategoryFields()"></select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskPriority">Priority</label>
+                        <select id="taskPriority"></select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskStatus">Status</label>
+                        <select id="taskStatus" onchange="app.updateConditionalFields()"></select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskDueDate">Due Date</label>
+                        <input type="date" id="taskDueDate" onchange="app.checkSlotAvailability()">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskDueTime">Due Time</label>
+                        <input type="time" id="taskDueTime" onchange="app.checkSlotAvailability()">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskDeadlineDate">Strict Deadline Date</label>
+                        <input type="date" id="taskDeadlineDate">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskDeadlineTime">Strict Deadline Time</label>
+                        <input type="time" id="taskDeadlineTime">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskPendingWith">Pending With</label>
+                        <select id="taskPendingWith"></select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskRecurrence">Recurrence</label>
+                        <select id="taskRecurrence">
+                            <option value="None">None</option>
+                            <option value="Daily">Daily</option>
+                            <option value="Weekly">Weekly</option>
+                            <option value="Monthly">Monthly</option>
+                            <option value="Yearly">Yearly</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group col-span-full" id="importInProgressFields" style="display:none;">
+                        <div style="background:var(--fill); padding:8px 12px; border-radius:10px; border:1px solid var(--line); display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+                            <div>
+                                <label style="font-size:0.68rem;">Payment %</label>
+                                <input type="text" id="pdPaymentPercent" placeholder="100%">
+                            </div>
+                            <div>
+                                <label style="font-size:0.68rem;">Payment Type</label>
+                                <select id="pdPaymentType">
+                                    <option value="Advance">Advance</option>
+                                    <option value="LC">LC</option>
+                                    <option value="DA">DA</option>
+                                    <option value="DP">DP</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.68rem;">Payment Against</label>
+                                <select id="pdPaymentAgainst">
+                                    <option value="PI">PI</option>
+                                    <option value="Commercial Invoice">CI</option>
+                                    <option value="BL">BL</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group col-span-full" id="subCategoryFieldsContainer">
+                        <div id="subCategoryRuleFields"></div>
+                    </div>
+
+                    <div class="form-group col-span-full" id="tallyNarrationBox" style="display:none;">
+                        <div style="background:var(--fill); padding:8px 12px; border-radius:10px; border:1px solid var(--line); display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                            <div>
+                                <label style="font-size:0.68rem;">Narration Type</label>
+                                <select id="taskNarrationType" onchange="app.renderNarrationFields()"></select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.68rem;" id="narrationDocLabel">Doc No / Ref</label>
+                                <input type="text" id="narrationDocNo" oninput="app.updateNarrationPreview()">
+                            </div>
+                            <div class="col-span-full" id="narrationDynamicInputs"></div>
+                            <div class="col-span-full">
+                                <label style="font-size:0.68rem;">Preview</label>
+                                <input type="text" id="narrationPreview" readonly style="background:var(--fill-2); font-family:monospace; font-size:0.75rem;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group col-span-full" id="keyPointsSection">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <label style="margin-bottom:0;">Key Points / Audit References</label>
+                            <button type="button" class="btn-row" onclick="app.addKeyPointRow()" style="font-size:0.7rem; padding:2px 8px; height:24px; cursor:pointer;">+ Add Field</button>
+                        </div>
+                        <div id="taskKeyPoints" style="display:flex; flex-direction:column; gap:6px;"></div>
+                    </div>
+
+                    <div class="form-group col-span-full">
+                        <label for="taskNotes">Notes & Remarks</label>
+                        <textarea id="taskNotes" rows="2" placeholder="Additional transaction details or UTR references..."></textarea>
+                    </div>
+                </div>
+
+                <div class="modal-buttons" style="margin-top: 14px; padding-top: 8px;">
+                    <button type="button" class="btn-modal secondary" onclick="app.closeTaskModal()" style="height: 36px; font-size: 0.82rem;">Cancel</button>
+                    <button type="submit" class="btn-modal primary" style="height: 36px; font-size: 0.82rem;">Save Entry</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- HOLIDAY MODAL -->
+    <div class="modal" id="holidayModal" role="dialog" aria-modal="true" aria-labelledby="holidayModalTitle">
+        <div class="modal-content" style="max-width:440px; padding:18px 22px;">
+            <div class="modal-header" style="margin-bottom:12px;">
+                <h2 id="holidayModalTitle" style="font-size:1.1rem; margin:0;">Holiday Entry</h2>
+                <button type="button" class="modal-close" onclick="app.closeHolidayModal()">✕</button>
+            </div>
+            <form id="holidayForm" onsubmit="app.saveHoliday(event)">
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div>
+                        <label style="font-size:0.75rem; font-weight:700;">Holiday Name</label>
+                        <input type="text" id="holidayName" required style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.75rem; font-weight:700;">Date</label>
+                        <input type="date" id="holidayDate" required style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.75rem; font-weight:700;">Calendar Type</label>
+                        <select id="holidayType" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;"></select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.75rem; font-weight:700;">Next Working Day</label>
+                        <input type="date" id="holidayNextWorking" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
+                    </div>
+                </div>
+                <div class="modal-buttons" style="margin-top:14px;">
+                    <button type="button" class="btn-modal secondary" onclick="app.closeHolidayModal()">Cancel</button>
+                    <button type="submit" class="btn-modal primary">Save Holiday</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- CLOUD SYNC SETUP MODAL -->
+    <div class="modal" id="syncSetupModal" role="dialog" aria-modal="true">
+        <div class="modal-content" style="max-width:480px; padding:18px 22px;">
+            <div class="modal-header" style="margin-bottom:12px;">
+                <h2 style="font-size:1.1rem; margin:0;">Cloud Sync Configuration</h2>
+                <button type="button" class="modal-close" onclick="document.getElementById('syncSetupModal').classList.remove('open')">✕</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+                <div>
+                    <label style="font-size:0.75rem; font-weight:700;">Apps Script Web App URL</label>
+                    <input type="text" id="syncUrlInput" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
+                </div>
+                <div>
+                    <label style="font-size:0.75rem; font-weight:700;">Authorization Token</label>
+                    <input type="text" id="authTokenInput" placeholder="PureEnergySecure2026" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
+                </div>
+                <div>
+                    <label style="font-size:0.75rem; font-weight:700;">Profile Name</label>
+                    <input type="text" id="profileInput" placeholder="default" style="width:100%; height:34px; border-radius:8px; border:1px solid var(--line); padding:4px 8px;">
+                </div>
+            </div>
+            <div class="modal-buttons" style="margin-top:14px;">
+                <button type="button" class="btn-modal secondary" onclick="document.getElementById('syncSetupModal').classList.remove('open')">Cancel</button>
+                <button type="button" class="btn-modal primary" onclick="app.saveSyncUrlModal()">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PRIVACY SCREEN LOCK OVERLAY -->
+    <div id="privacyLockOverlay" role="dialog" aria-modal="true" aria-label="Security Screen Lock">
+        <div class="lock-box">
+            <div class="lock-icon-ring">🔒</div>
+            <h2 style="font-size:1.25rem; font-weight:800; margin-bottom:4px; color:var(--label);">Banking Work Tracker</h2>
+            <p style="font-size:0.8rem; color:var(--label-2); font-weight:500; margin-top:0;">Confidential Treasury Session Locked</p>
+
+            <div class="lock-dots" id="pinDots">
+                <div class="lock-dot"></div><div class="lock-dot"></div><div class="lock-dot"></div><div class="lock-dot"></div>
+            </div>
+
+            <div class="pin-keypad" id="pinKeypad">
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('1')">1</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('2')">2</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('3')">3</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('4')">4</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('5')">5</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('6')">6</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('7')">7</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('8')">8</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('9')">9</button>
+                <button type="button" class="pin-btn" id="bioUnlockBtn" onclick="app.security.unlockWithBiometrics()">👆</button>
+                <button type="button" class="pin-btn" onclick="app.security.enterDigit('0')">0</button>
+                <button type="button" class="pin-btn" onclick="app.security.clearPin()">⌫</button>
+            </div>
+            <button type="button" class="btn-modal secondary" style="width:100%; height:36px; font-size:0.78rem; margin-top:8px;" onclick="app.security.forgotPin()">Forgot PIN?</button>
+        </div>
+    </div>
+
+    <script src="./app.js"></script>
+</body>
+</html>
