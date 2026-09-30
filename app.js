@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '63';
+const APP_BUILD = '64';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -377,23 +377,44 @@ const app = {
             catch (e) {
                 // Apps Script sends an HTML page when the deployment is wrong,
                 // needs re-authorising, or crashed — say so plainly.
-                throw new Error(/<html|<!doctype/i.test(text)
-                    ? 'The Apps Script returned a web page instead of data — redeploy it (Deploy → Manage deployments → New version) and check access is "Anyone".'
-                    : 'Unreadable reply from the Apps Script.');
+                const err = new Error(this.explainHtmlReply(text));
+                err.kind = 'config';
+                throw err;
             }
             if (data && data.serverTime) this.noteServerTime(Number(data.serverTime));
             if (data && data.status === 'error' && /unauthori[sz]ed/i.test(data.message || '')) {
-                data.message = 'Security token rejected — set the same token in Config → Cloud Sync → Connection as AUTH_TOKEN in the Apps Script.';
+                data.message = 'Security token rejected — the token in Config → Cloud Sync → Connection must match AUTH_TOKEN in the Apps Script (Project Settings → Script Properties). Use "Test connection" to check.';
+                data.kind = 'config';
             }
+            if (data && data.scriptVersion) this.serverVersion = String(data.scriptVersion);
             return data;
         }).catch(err => {
             if (err && err.name === 'AbortError') throw new Error('The sheet took too long to answer — will retry.');
+            if (err && err.name === 'TypeError' && /fetch/i.test(err.message || '')) {
+                const e2 = new Error(navigator.onLine ? 'Could not reach script.google.com (network or blocked by a browser shield/extension).' : 'You are offline — changes are saved on this device.');
+                throw e2;
+            }
             throw err;
         }).finally(() => { if (timer) clearTimeout(timer); });
     },
 
     REQUEST_TIMEOUT_MS: 45000,
 
+    // Turns Google's HTML error page into a plain, specific instruction.
+    explainHtmlReply(html) {
+        const t = String(html || '');
+        const title = ((/<title[^>]*>([^<]*)<\/title>/i.exec(t) || [])[1] || '').trim();
+        const low = (title + ' ' + t.slice(0, 4000)).toLowerCase();
+        if (/accounts\.google\.com|sign in|servicelogin/.test(low))
+            return 'Google asked for a sign-in: the web app\'s access is not "Anyone". In Apps Script: Deploy → Manage deployments → Edit → Who has access: Anyone → Deploy.';
+        if (/too many times|quota|rate limit|429/.test(low))
+            return 'Google is rate-limiting the script (too many calls). Close extra tabs/windows of the app; sync will slow down and retry by itself.';
+        if (/not found|unable to open|does not exist|404/.test(low))
+            return 'That script URL no longer exists — you probably made a NEW deployment (new URL). Copy the current /exec URL from Deploy → Manage deployments into Connection.';
+        if (/authori[sz]ation|permission|access denied|403/.test(low))
+            return 'The script needs permission again. Open the Apps Script, run testGeminiCall once and approve access, then Deploy → Manage deployments → New version.';
+        return 'Google returned an error page' + (title ? ' ("' + title + '")' : '') + ' instead of data. Redeploy: Deploy → Manage deployments → Edit → Version: New version → Deploy.';
+    },
     /* ---------- SYNC HEALTH ----------
        Last success / last error are kept so a silent failure is visible:
        hover the status pill, or open Config → Cloud Sync. */
@@ -401,13 +422,27 @@ const app = {
         const now = Date.now();
         let h = {};
         try { h = JSON.parse(localStorage.getItem('pureEnergySyncHealth') || '{}') || {}; } catch (e) {}
-        if (ok) { h.lastOk = now; h.lastError = ''; h.fails = 0; }
-        else { h.lastFail = now; h.lastError = String(message || 'Unknown error'); h.fails = (Number(h.fails) || 0) + 1; }
+        if (ok) {
+            h.lastOk = now; h.lastError = ''; h.fails = 0;
+            this.syncPaused = ''; this.syncBackoffUntil = 0;
+        } else {
+            h.lastFail = now; h.lastError = String(message || 'Unknown error'); h.fails = (Number(h.fails) || 0) + 1;
+            const setup = /token rejected|error page|sign-in|no longer exists|permission again|not "anyone"/i.test(h.lastError);
+            if (setup) this.syncPaused = h.lastError;
+            else {
+                const rate = /rate-limit|too many/i.test(h.lastError);
+                const delay = Math.min(300000, (rate ? 60000 : 15000) * Math.pow(2, Math.max(0, h.fails - 1)));
+                this.syncBackoffUntil = now + delay;
+            }
+        }
         try { localStorage.setItem('pureEnergySyncHealth', JSON.stringify(h)); } catch (e) {}
         const pill = document.getElementById('saveStatus');
         if (pill) pill.title = ok ? 'Last synced ' + new Date(now).toLocaleString('en-IN') : 'Sync problem: ' + h.lastError;
         // Say it once when sync starts failing repeatedly, not every 15 s.
-        if (!ok && h.fails === 3) this.showToast('Cloud sync keeps failing: ' + h.lastError, 'error');
+        if (!ok && (h.fails === 3 || (this.syncPaused && h.fails === 1))) {
+            this.showToast((this.syncPaused ? 'Cloud sync paused: ' : 'Cloud sync keeps failing: ') + h.lastError, 'error',
+                { label: 'Fix', onClick: () => this.openSyncSetup() });
+        }
         this.renderSyncHealth();
     },
 
@@ -426,6 +461,8 @@ const app = {
             '<br><b>Last successful sync:</b> ' + fmt(h.lastOk) +
             (pending ? ' · <b>' + pending + '</b> deletion(s) waiting to upload' : '') +
             (Math.abs(skew) >= 30 ? '<br><b>Clock:</b> this device is ' + Math.abs(skew) + ' s ' + (skew > 0 ? 'behind' : 'ahead of') + ' the sheet (corrected automatically)' : '') +
+            (this.syncPaused ? '<br><span style="color:var(--red-ink);"><b>Auto-sync is paused</b> until the connection is fixed — open <b>Connection</b> and use <b>Test connection</b>.</span>' : '') +
+            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (this.serverVersion !== APP_BUILD ? ' (app is ' + APP_BUILD + ' — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
             (h.lastError ? '<br><span style="color:var(--red-ink);"><b>Last error</b> (' + fmt(h.lastFail) + '): ' + this.sanitize(h.lastError) + '</span>' : '');
     },
 
@@ -875,6 +912,12 @@ const app = {
         window.addEventListener('scroll', reposition, true);
         window.addEventListener('resize', reposition);
         this.updateNotifyState();
+
+        const pill = document.getElementById('saveStatus');
+        if (pill) {
+            pill.style.cursor = 'pointer';
+            pill.addEventListener('click', () => { this.switchTab('Config'); this.showCfgPanel('cfgCloudSync'); this.renderSyncHealth(); });
+        }
     },
 
     handleDelegatedClick(e) {
@@ -1017,9 +1060,11 @@ const app = {
         const saver = document.getElementById('saveStatus');
         if (saver && !silent) saver.innerHTML = '<span class="dot" style="background:var(--blue)"></span> pulling...';
 
+        this._pullFailed = false;
         return this.cloudRequest({ action: "fetchTasks" })
             .then(data => {
                 if (!data || data.status !== 'success') throw new Error((data && data.message) || "Failed to pull tasks");
+                this.noteSyncResult(true);
 
                 const removed = this.applyRemoteTombstones(data.deletedIds);
                 const result = this.mergeTasks(data.tasks);
@@ -1040,8 +1085,11 @@ const app = {
                 if (saver) saver.innerHTML = `<span class="dot" style="background:var(--green)"></span> synced ${timeStr}`;
             })
             .catch(err => {
-                if (saver) saver.innerHTML = '<span class="dot" style="background:var(--red)"></span> pull failed';
+                this._pullFailed = true;
                 this.noteSyncResult(false, err && err.message);
+                if (saver) saver.innerHTML = this.syncPaused
+                    ? '<span class="dot" style="background:var(--red)"></span> sync paused — tap to fix'
+                    : '<span class="dot" style="background:var(--red)"></span> offline — saved here';
                 if (manual) this.showToast(err.message || "Cloud pull failed", "error");
             });
     },
@@ -1106,6 +1154,7 @@ const app = {
         if (!this.currentUser) return Promise.resolve();
         if (this.syncInProgress) return Promise.resolve();
         if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim() === "") return Promise.resolve();
+        if (!manual && (this.syncPaused || Date.now() < (this.syncBackoffUntil || 0))) return Promise.resolve();
 
         const tomb = this._tomb || this.loadTombstones();
         const pendingDeletes = tomb.pending.slice();
@@ -1166,8 +1215,10 @@ const app = {
                 this.syncInProgress = false;
                 if (mark) mark.classList.remove('busy');
                 console.error('Cloud Sync Error:', error);
-                if (saver) saver.innerHTML = '<span class="dot" style="background:var(--red)"></span> not synced — saved locally';
                 this.noteSyncResult(false, error && error.message);
+                if (saver) saver.innerHTML = this.syncPaused
+                    ? '<span class="dot" style="background:var(--red)"></span> sync paused — tap to fix'
+                    : '<span class="dot" style="background:var(--red)"></span> not synced — saved locally';
                 if (manual) this.showToast(error.message || "Sync failed. Your data is safe on this device.", "error");
             });
     },
@@ -1184,6 +1235,15 @@ const app = {
         if (this.cycleBusy && Date.now() - (this._cycleStartedAt || 0) < this.REQUEST_TIMEOUT_MS * 2 + 5000) return;
 
         if (!manual && document.hidden) return;
+        // A setup problem (wrong token, wrong URL, access not "Anyone") won't
+        // fix itself — stop calling Google every 15 s until it's fixed.
+        if (!manual && this.syncPaused) return;
+        // After ordinary failures, back off: 15 s, 30 s, 1 min … up to 5 min.
+        if (!manual && Date.now() < (this.syncBackoffUntil || 0)) return;
+        // Only ONE window per device talks to the sheet (installed app and a
+        // browser tab used to double every call); the others pick up its
+        // results through shared storage.
+        if (!manual && !this.claimSyncLeader()) return;
         // Only pause while an EDITOR is open (a pull rebuilds the dropdowns
         // the editor is using). Alerts, reminders, mail and settings popups
         // no longer stop sync — the Past Due Alert is up most of the day, and
@@ -1196,9 +1256,21 @@ const app = {
         Promise.resolve()
             .then(() => this.pullTasksFromCloud(manual, !manual))
             .catch(() => {})
-            .then(() => this.syncToGoogleSheets(manual))
+            .then(() => (this.syncPaused || this._pullFailed) ? null : this.syncToGoogleSheets(manual))
             .catch(() => {})
             .then(() => { this.cycleBusy = false; });
+    },
+
+    TAB_ID: Math.random().toString(36).slice(2),
+    LEADER_KEY: 'pureEnergySyncLeader',
+
+    claimSyncLeader() {
+        const now = Date.now();
+        let cur = null;
+        try { cur = JSON.parse(localStorage.getItem(this.LEADER_KEY) || 'null'); } catch (e) {}
+        if (cur && cur.id !== this.TAB_ID && now - (Number(cur.ts) || 0) < this.SYNC_EVERY_MS * 3) return false;
+        try { localStorage.setItem(this.LEADER_KEY, JSON.stringify({ id: this.TAB_ID, ts: now })); } catch (e) {}
+        return true;
     },
 
     EDITOR_MODALS: ['taskModal', 'listManagerModal', 'subCategoryRulesModal', 'narrationRulesModal', 'holidayModal', 'calendarManagerModal'],
@@ -1212,8 +1284,59 @@ const app = {
         document.getElementById('gmailIndexInput').value = localStorage.getItem(CONFIG.GMAIL_INDEX_KEY) || '0';
         document.getElementById('profileInput').value = this.currentUser || 'default';
         const tok = document.getElementById('syncTokenInput');
-        if (tok) tok.value = localStorage.getItem(CONFIG.TOKEN_KEY) || '';
+        if (tok) { tok.value = localStorage.getItem(CONFIG.TOKEN_KEY) || ''; tok.type = 'password'; }
+        const res = document.getElementById('connTestResult');
+        if (res) { res.style.display = 'none'; res.innerHTML = ''; }
         document.getElementById('syncSetupModal').classList.add('open');
+    },
+
+    // Checks the URL / token / profile typed in the Connection box WITHOUT
+    // saving them, and says exactly what's wrong.
+    testConnection() {
+        const out = document.getElementById('connTestResult');
+        const btn = document.getElementById('connTestBtn');
+        const url = (document.getElementById('syncUrlInput').value || '').trim();
+        const token = (document.getElementById('syncTokenInput').value || '').trim() || CONFIG.DEFAULT_TOKEN;
+        const profile = ((document.getElementById('profileInput').value || '').trim().toLowerCase()) || 'default';
+        const show = (ok, html) => { out.className = 'conn-result ' + (ok ? 'ok' : 'bad'); out.innerHTML = html; out.style.display = 'block'; };
+        if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) {
+            show(false, '<b>URL looks wrong.</b> It must look like https://script.google.com/macros/s/…/exec (copy it from Deploy → Manage deployments).');
+            return;
+        }
+        if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+        const ctrl = window.AbortController ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
+        fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'ping', token: token, username: profile }), signal: ctrl ? ctrl.signal : undefined })
+            .then(r => r.text())
+            .then(text => {
+                let data = null;
+                try { data = JSON.parse(text); } catch (e) {}
+                if (!data) { show(false, '<b>Reached Google, but not your script.</b><br>' + this.sanitize(this.explainHtmlReply(text))); return; }
+                if (data.status === 'error' && /unauthori[sz]ed/i.test(data.message || '')) {
+                    show(false, '<b>Script reached ✓ — token rejected ✗</b><br>The token here' + ((document.getElementById('syncTokenInput').value || '').trim() ? '' : ' (blank = PureEnergySecure2026)') +
+                        ' does not match <b>AUTH_TOKEN</b> in Apps Script → Project Settings → Script Properties. Make them identical (watch for spaces), then Save.');
+                    return;
+                }
+                if (data.status === 'error' && /unknown action: ping/i.test(data.message || '')) {
+                    show(true, '<b>Script reached ✓ · Token accepted ✓</b><br>Your deployed Code.gs is an older build. Sync will work, but paste the latest Code.gs and deploy a <b>New version</b> to get the fixes.');
+                    return;
+                }
+                if (data.status === 'success') {
+                    show(true, '<b>Connected ✓ · Token accepted ✓</b><br>Profile <b>' + this.sanitize(profile) + '</b> → sheet tab <b>' + this.sanitize(data.sheet || '') + '</b> has <b>' + (data.taskCount || 0) +
+                        '</b> entries.' + (data.scriptVersion && String(data.scriptVersion) !== APP_BUILD ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' vs app ' + APP_BUILD + ' — deploy the latest Code.gs as a New version.' : '') +
+                        (data.otherProfiles && data.otherProfiles.length ? '<br>Other profiles in this sheet: ' + data.otherProfiles.map(p => this.sanitize(p)).join(', ') + ' — every device must use the same one.' : '') +
+                        '<br>Tap <b>Save Settings</b> to use this.');
+                    return;
+                }
+                show(false, '<b>Script replied with an error:</b> ' + this.sanitize(data.message || 'unknown'));
+            })
+            .catch(err => {
+                show(false, err && err.name === 'AbortError'
+                    ? '<b>No answer in 30 s.</b> The script may be busy or rate-limited — close other tabs of the app and try again.'
+                    : '<b>Could not reach script.google.com.</b> Check your internet, or a browser shield/extension blocking it (e.g. Brave Shields).');
+            })
+            .finally(() => { if (timer) clearTimeout(timer); if (btn) { btn.disabled = false; btn.textContent = 'Test connection'; } });
     },
 
     saveSyncUrlModal() {
@@ -1239,7 +1362,9 @@ const app = {
             return;
         }
         document.getElementById('syncSetupModal').classList.remove('open');
-        this.showToast("Settings saved", "success");
+        this.syncPaused = ''; this.syncBackoffUntil = 0;
+        this.showToast("Settings saved — syncing", "success");
+        this.syncCycle(true);
     },
 
     /* ---------- EMAIL INTEGRATION ---------- */
