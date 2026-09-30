@@ -1,8 +1,8 @@
 /* ==========================================================================
-   BANKING WORK TRACKER — SERVICE WORKER (v71)
+   BANKING WORK TRACKER — SERVICE WORKER (v72)
    ========================================================================== */
 
-const CACHE_VERSION = 'btw-v71';
+const CACHE_VERSION = 'btw-v72';
 const SHELL_CACHE = CACHE_VERSION + '-shell';
 const RUNTIME_CACHE = CACHE_VERSION + '-runtime';
 
@@ -91,4 +91,24 @@ self.addEventListener('notificationclick', (event) => {
             }
         })
     );
+});
+
+// Inter-process messaging
+self.addEventListener('message', (event) => {
+    const data = event.data || {};
+    if (data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    } else if (data.type === 'GET_VERSION') {
+        if (event.ports && event.ports[0]) {
+            event.ports[0].postMessage({ version: CACHE_VERSION });
+        }
+    } else if (data.type === 'CLEAR_CACHES') {
+        caches.keys().then((keys) => {
+            return Promise.all(keys.map((k) => caches.delete(k)));
+        }).then(() => {
+            if (event.ports && event.ports[0]) {
+                event.ports[0].postMessage({ cleared: true });
+            }
+        });
+    }
 });
