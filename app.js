@@ -26,6 +26,27 @@ const CONFIG = {
     get DEADLINE_ACK_KEY() { return `${this.BASE_DEADLINE_ACK_KEY}_${app.currentUser}`; }
 };
 
+// Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
+const APP_BUILD = '62';
+
+// If an old cached index.html is paired with this app.js (or vice versa),
+// wipe the offline cache and reload ONCE so both come from the same deploy.
+(function guardBuildMismatch() {
+    try {
+        const meta = document.querySelector('meta[name="btw-build"]');
+        const pageBuild = meta ? meta.getAttribute('content') : '';
+        if (pageBuild === APP_BUILD) { sessionStorage.removeItem('btwBuildFix'); return; }
+        if (sessionStorage.getItem('btwBuildFix') === APP_BUILD) return;   // already tried — don't loop
+        sessionStorage.setItem('btwBuildFix', APP_BUILD);
+        const reload = () => window.location.reload();
+        const wipe = window.caches ? caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))) : Promise.resolve();
+        wipe.then(() => navigator.serviceWorker && navigator.serviceWorker.getRegistration
+            ? navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {}) : null)
+            .then(reload, reload);
+        setTimeout(reload, 2500);
+    } catch (e) {}
+})();
+
 const app = {
     currentUser: null,
     tasks: [], lists: {}, currentTab: 'Dashboard',
@@ -244,7 +265,9 @@ const app = {
         this.currentUser = localStorage.getItem('currentUser') || 'default';
         localStorage.setItem('currentUser', this.currentUser);
         this.applyTheme();
-        if (typeof security !== 'undefined') security.init();
+        if (typeof security !== 'undefined') {
+            try { security.init(); } catch (e) { console.error('Security init failed', e); document.body.classList.remove('is-locked', 'is-shielded'); }
+        }
 
         document.getElementById('mainAppHeader').style.display = 'flex';
         document.getElementById('tabBar').style.display = 'flex';
@@ -5931,6 +5954,8 @@ const security = {
 
     /* ---------- boot ---------- */
     init() {
+        this.ensureDom();
+        this.setInert();          // clear anything a previous build froze
         this.buildDots();
         this.bindKeypad();
 
@@ -5957,6 +5982,12 @@ const security = {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) this.onHide(); else this.onShow();
         });
+        // Fail-safes: the shield only belongs on screen while the page is
+        // actually hidden. Any focus or tap on a visible page clears it.
+        window.addEventListener('focus', () => { if (!document.hidden) this.clearShield(); });
+        const sh = document.getElementById('privacyShield');
+        if (sh) sh.addEventListener('pointerdown', () => this.clearShield());
+        setInterval(() => { if (!document.hidden && document.body.classList.contains('is-shielded')) this.clearShield(); }, 3000);
         window.addEventListener('pagehide', () => this.onHide());
         window.addEventListener('pageshow', () => { if (!document.hidden) this.onShow(); });
 
@@ -5982,8 +6013,14 @@ const security = {
     onShow() {
         if (this.hasPin() && !this.locked && this.idleExpired()) this.lock('idle');
         // tiny delay so the shield is still up during the OS "return" animation
-        setTimeout(() => { if (!document.hidden) document.body.classList.remove('is-shielded'); }, 60);
+        setTimeout(() => this.clearShield(), 60);
         if (this.locked) this.renderLockout();
+    },
+
+    clearShield() {
+        if (document.hidden) return;
+        if (this.hasPin() && !this.locked && this.idleExpired()) { this.lock('idle'); }
+        document.body.classList.remove('is-shielded');
     },
 
     idleCheck() {
@@ -5995,14 +6032,29 @@ const security = {
     /* ---------- lock / unlock ---------- */
     lock(reason, broadcast = true) {
         if (!this.hasPin()) return;
+        try { this._lock(reason, broadcast); }
+        catch (e) {
+            // Never leave the app half-locked: undo and report.
+            console.error('Lock failed', e);
+            this.locked = false;
+            document.body.classList.remove('is-locked');
+            this.showLockDom(false);
+            this.setInert();
+        }
+    },
+
+    _lock(reason, broadcast) {
         const already = this.locked;
+        this.ensureDom();
         this.locked = true;
         this.entry = '';
-        this.renderDots();
+        this.buildDots();
         document.body.classList.add('is-locked');
-        this.setInert(true);
+        this.showLockDom(true);
         if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-        document.getElementById('lockSub').textContent = reason === 'idle' ? 'Locked after inactivity — enter your PIN' : 'Enter your PIN';
+        const sub = document.getElementById('lockSub');
+        if (sub) sub.textContent = reason === 'idle' ? 'Locked after inactivity — enter your PIN' : 'Enter your PIN';
+        this.bindKeypad();
         this.renderLockout();
         if (!already) {
             this.write(this.STATE_KEY, { locked: true, ts: Date.now() });
@@ -6019,7 +6071,8 @@ const security = {
         this.locked = false;
         this.entry = '';
         document.body.classList.remove('is-locked', 'is-shielded');
-        this.setInert(false);
+        this.showLockDom(false);
+        this.setInert();
         clearInterval(this._countdown); this._countdown = null;
         this.write(this.STATE_KEY, { locked: false, ts: Date.now() });
         this.touch(true);
@@ -6036,12 +6089,51 @@ const security = {
         }
     },
 
-    setInert(on) {
-        Array.from(document.body.children).forEach(el => {
-            if (el.id === 'lockScreen' || el.id === 'privacyShield' || el.tagName === 'SCRIPT') return;
-            if (on) el.setAttribute('inert', ''); else el.removeAttribute('inert');
-            if (on) el.setAttribute('aria-hidden', 'true'); else el.removeAttribute('aria-hidden');
+    // The full-screen overlay already blocks every tap; the page underneath
+    // is NEVER made inert. (An earlier build did, and if the lock screen
+    // failed to appear — e.g. an old cached index.html — the whole app was
+    // left frozen.) This only cleans up anything that build left behind.
+    setInert() {
+        document.querySelectorAll('[inert]').forEach(el => {
+            if (el.id === 'lockScreen') return;
+            el.removeAttribute('inert');
+            el.removeAttribute('aria-hidden');
         });
+    },
+
+    // Builds the shield + lock screen if this page's HTML doesn't have them
+    // (version mismatch), so locking can never happen without a visible,
+    // working keypad on top.
+    ensureDom() {
+        if (!document.getElementById('privacyShield')) {
+            const sh = document.createElement('div');
+            sh.className = 'privacy-shield'; sh.id = 'privacyShield'; sh.setAttribute('aria-hidden', 'true');
+            sh.innerHTML = '<div class="shield-text">Banking Work Tracker</div>';
+            document.body.appendChild(sh);
+        }
+        if (!document.getElementById('lockScreen')) {
+            const ls = document.createElement('div');
+            ls.className = 'lock-screen'; ls.id = 'lockScreen';
+            ls.setAttribute('role', 'dialog'); ls.setAttribute('aria-modal', 'true');
+            ls.innerHTML = '<div class="lock-card" id="lockCard"><div class="lock-title" id="lockTitle">App Locked</div>' +
+                '<div class="lock-sub" id="lockSub">Enter your PIN</div><div class="lock-dots" id="lockDots"></div>' +
+                '<div class="lock-msg" id="lockMsg"></div><div class="lock-pad" id="lockPad">' +
+                ['1','2','3','4','5','6','7','8','9','ok','0','del'].map(k => '<button type="button" data-k="' + k + '"' +
+                    (k === 'ok' || k === 'del' ? ' class="k-fn"' : '') + '>' + (k === 'ok' ? 'OK' : k === 'del' ? '⌫' : k) + '</button>').join('') +
+                '</div><button type="button" class="lock-link" onclick="security.forgotPin()">Forgot PIN?</button></div>';
+            document.body.appendChild(ls);
+        }
+        // Minimal inline styling so it works even without this build's CSS.
+        const ls = document.getElementById('lockScreen');
+        if (ls && getComputedStyle(ls).position !== 'fixed') {
+            ls.style.cssText = 'position:fixed;inset:0;z-index:30001;display:none;align-items:center;justify-content:center;background:rgba(242,242,247,0.97);';
+            ls.dataset.inlineStyled = '1';
+        }
+    },
+
+    showLockDom(on) {
+        const ls = document.getElementById('lockScreen');
+        if (ls && ls.dataset.inlineStyled) ls.style.display = on ? 'flex' : 'none';
     },
 
     /* ---------- keypad ---------- */
@@ -6072,6 +6164,10 @@ const security = {
 
     onKey(e) {
         if (!this.locked) return;
+        const ls = document.getElementById('lockScreen');
+        if (ls && e.target && e.target.closest && !e.target.closest('#lockScreen') && e.target !== document.body) {
+            try { e.target.blur(); } catch (err) {}
+        }
         if (/^\d$/.test(e.key)) { e.preventDefault(); e.stopImmediatePropagation(); this.press(e.key); }
         else if (e.key === 'Backspace') { e.preventDefault(); e.stopImmediatePropagation(); this.press('del'); }
         else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); this.press('ok'); }

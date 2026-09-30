@@ -10,14 +10,16 @@
 
    Strategies
      navigation      network first (preload + 4s timeout) -> cached shell -> offline page
-     shell files     stale-while-revalidate, so a new deploy lands on next load
+     app code        index.html / app.js / manifest: network first too, so the
+                     page and its script always come from the SAME deploy
+                     (mixing an old index.html with a new app.js froze v61)
      images / fonts  cache first, refreshed in the background
      other GETs      stale-while-revalidate
      cross-origin    untouched — Apps Script sync and Gmail always hit the network
      non-GET         untouched
 */
 
-const CACHE_VERSION = 'btw-v61';
+const CACHE_VERSION = 'btw-v62';
 const SHELL_CACHE = CACHE_VERSION + '-shell';
 const RUNTIME_CACHE = CACHE_VERSION + '-runtime';
 const RUNTIME_LIMIT = 60;
@@ -55,6 +57,10 @@ function isShellPath(url) {
     const name = entry.replace('./', '');
     return name === '' ? url.pathname.endsWith('/') : url.pathname.endsWith('/' + name);
   });
+}
+
+function isCodePath(url) {
+  return /\/(index\.html|app\.js|manifest\.webmanifest)$/.test(url.pathname) || url.pathname.endsWith('/');
 }
 
 function isAsset(request, url) {
@@ -178,7 +184,7 @@ async function navigationHandler(event) {
     }
 
     const res = await Promise.race([
-      fetch(event.request),
+      fetch(event.request, { cache: 'no-cache' }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), NAV_TIMEOUT))
     ]);
     if (cacheable(res)) putSafe(SHELL_CACHE, './index.html', res.clone());
@@ -188,6 +194,22 @@ async function navigationHandler(event) {
     const root = await caches.match('./');
     if (root) return root;
     return new Response(OFFLINE_PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+  }
+}
+
+// Fresh from the network (bypassing the HTTP cache), falling back to the
+// cached copy only when offline or the network is too slow.
+async function networkFirst(request, cacheName) {
+  try {
+    const res = await Promise.race([
+      fetch(request, { cache: 'no-cache' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), NAV_TIMEOUT))
+    ]);
+    if (cacheable(res)) putSafe(cacheName, request, res.clone());
+    return res;
+  } catch (e) {
+    const cached = await caches.match(request, { ignoreSearch: true });
+    return cached || new Response('', { status: 504, statusText: 'Offline' });
   }
 }
 
@@ -234,6 +256,11 @@ self.addEventListener('fetch', (event) => {
 
   if (req.mode === 'navigate') {
     event.respondWith(navigationHandler(event));
+    return;
+  }
+
+  if (isCodePath(url)) {
+    event.respondWith(networkFirst(req, SHELL_CACHE));
     return;
   }
 
