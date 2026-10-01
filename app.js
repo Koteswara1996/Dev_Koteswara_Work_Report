@@ -5443,7 +5443,11 @@ const app = {
        "Name of Payee" / "Vendor Name" / "Beneficiary" / "Party Name")
        are NEVER part of the Generated Narration. They are used only in the
        Daily Activity Report, as "Payee Name: <narration without mail chain>". */
-    PAYEE_RX: /\bpay(?:ee?)?\b|payee|vendor|beneficiar|supplier|party\s*name/i,
+    // Only a label that IS the vendor's name counts as the payee field —
+    // "Vendor Name", "Name of Payee", "Pay To", "Party Name", "Beneficiary".
+    // Other fields that merely mention the vendor ("Vendor Invoice No",
+    // "Supplier GSTIN") are ordinary fields and go into the narration.
+    PAYEE_RX: /^\s*(?:name\s+of\s+(?:the\s+)?)?(?:vendor|payee|paye|pay\s*to|party|beneficiary|supplier)(?:'?s)?(?:\s+name)?\s*:*\s*$/i,
 
     isPayeeField(nr, label) {
         if (!label) return false;
