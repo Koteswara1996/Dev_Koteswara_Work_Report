@@ -26,7 +26,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '71';
+const APP_BUILD = '74';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -471,7 +471,7 @@ const app = {
             (pending ? ' · <b>' + pending + '</b> deletion(s) waiting to upload' : '') +
             (Math.abs(skew) >= 30 ? '<br><b>Clock:</b> this device is ' + Math.abs(skew) + ' s ' + (skew > 0 ? 'behind' : 'ahead of') + ' the sheet (corrected automatically)' : '') +
             (h.fails ? '<br><span style="color:var(--amber-ink);"><b>Retrying automatically</b> — ' + h.fails + ' attempt(s) missed since ' + fmt(h.failingSince) + '. Nothing is lost; entries are kept on this device until the sheet answers.</span>' : '') +
-            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (Number(this.serverVersion) < 69 ? ' (older — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
+            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (Number(this.serverVersion) < 70 ? ' (older — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
             (h.lastError ? '<br><span style="color:var(--label-2);"><b>Last message from Google</b> (' + fmt(h.lastFail) + '): ' + this.sanitize(h.lastError) + '</span>' : '');
     },
 
@@ -522,7 +522,34 @@ const app = {
 
     isPaymentEntry(t) {
         if (t.narration && (t.narration.typeName || t.narration.text)) return true;
-        return /payment|rtgs|neft|imps|remittance|remit|swift|transfer|advance|vendor/i.test((t.category || '') + ' ' + (t.subCategory || ''));
+        return /domestic\s*payments?|urgent\s*payments?/i.test(t.category || '');
+    },
+
+    DAR_PAYMENT_INTRO: [
+        'Modified the respective party ledgers in Tally by passing the necessary payment entries to accurately record the payment initiation.',
+        'Prepared payment files after verifying beneficiary details (name, account number, IFSC), transaction dates, and payment purposes. Verified party Statements of Account (SOA) prior to payment to avoid reconciliation discrepancies and ensure accurate vendor tracking.'
+    ],
+
+    paymentIntroLines() {
+        const l = this.lists && Array.isArray(this.lists.darPaymentIntro) ? this.lists.darPaymentIntro : null;
+        return (l || this.DAR_PAYMENT_INTRO).map(x => String(x || '').trim()).filter(Boolean);
+    },
+
+    renderPaymentIntroEditor() {
+        const a = document.getElementById('darIntro1'), b = document.getElementById('darIntro2');
+        if (!a || !b) return;
+        const l = this.paymentIntroLines();
+        a.value = l[0] || ''; b.value = l[1] || '';
+    },
+
+    savePaymentIntro(reset) {
+        const a = document.getElementById('darIntro1'), b = document.getElementById('darIntro2');
+        this.lists.darPaymentIntro = reset ? this.DAR_PAYMENT_INTRO.slice() : [a.value, b.value].map(x => String(x || '').trim());
+        this.listsUpdatedAt = this.stamp();
+        localStorage.setItem(CONFIG.LISTS_TS_KEY, String(this.listsUpdatedAt));
+        if (this.saveLists) this.saveLists(); else this.saveData();
+        this.renderPaymentIntroEditor();
+        this.showToast(reset ? 'Payment lines reset to default.' : 'Payment lines saved — used in every report.', 'success');
     },
 
     /* ================= DAILY ACTIVITY REPORT ENGINE =================
@@ -546,51 +573,102 @@ const app = {
     reportLine(t) {
         const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
         if (this.isPaymentEntry(t)) {
-            const n = clean(this.reportDetailsFor(t, ''));
-            if (n && n !== clean(t.notes)) return n;
-            return clean(t.description) + (t.notes ? ' — ' + clean(t.notes).slice(0, 160) : '');
+            // "Vendor Name: <narration without mail chain>"
+            const n = t.narration || {};
+            const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
+            let body = '';
+            if (nr) {
+                const sub = n.subCategoryText !== undefined ? n.subCategoryText : this.subCategoryTextFor(t);
+                body = this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, '', n.fieldsValues, sub);
+            } else if (n.reportText) {
+                body = n.reportText;
+            } else if (n.text) {
+                body = t.mailChain ? String(n.text).split(String(t.mailChain).trim()).join('') : n.text;
+            } else {
+                body = t.description;
+            }
+            body = clean(body);
+            const payee = this.taskPayee(t);
+            if (payee && body.toLowerCase().indexOf(payee.toLowerCase() + ':') === 0) return body;
+            return payee ? payee + ': ' + body : body;
         }
-        const kp = Array.isArray(t.keyPoints) ? t.keyPoints.filter(k => k && (k.key || k.value)).map(k => (k.key ? k.key + ': ' : '') + k.value).join(', ') : '';
-        const extra = kp || clean(t.notes).slice(0, 160);
-        return clean(t.description) + (extra ? ' — ' + extra : '');
+        // every other task: one line — the description only
+        return clean(t.description);
     },
 
-    buildDailyReportText(date, inputs) {
+    // One model drives both the on-screen text and the Excel file, so they
+    // always match. Duplicate lines (ignoring case, spacing, punctuation)
+    // are removed across all sections and counted.
+    buildReportModel(date, inputs) {
         inputs = inputs || {};
         const d = this.collectReportData(date);
-        const fixed = (inputs.fixed || []).filter(Boolean);
-        const general = (inputs.general || []).filter(g => g && g.activity);
-        const title = this.formatDateStr(date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-        const out = [];
-        out.push('Daily Activity Report — ' + title);
-        const sum = [];
-        sum.push(d.payments.length + ' payment' + (d.payments.length === 1 ? '' : 's') + ' processed');
-        if (d.others.length) sum.push(d.others.length + ' other task' + (d.others.length === 1 ? '' : 's') + ' completed');
-        if (d.followed.length) sum.push(d.followed.length + ' followed up');
-        if (fixed.length) sum.push(fixed.length + ' routine');
-        if (general.length) sum.push(general.length + ' other activit' + (general.length === 1 ? 'y' : 'ies'));
-        out.push('Summary: ' + sum.join(' · '));
-        let sec = 0;
-        const letter = () => String.fromCharCode(65 + (sec++));
-        const block = (head, items, fmt) => {
-            if (!items.length) return;
-            out.push('');
-            out.push(letter() + '. ' + head + ' (' + items.length + ')');
-            items.forEach((it, i) => out.push((i + 1) + '. ' + fmt(it)));
-        };
-        block('Payments processed', d.payments, t => this.reportLine(t));
-        block('Other work completed', d.others, t => this.reportLine(t));
-        block('Followed up / in progress', d.followed, t => {
-            const bits = [String(t.status || '')];
-            if (t.pendingWith) bits.push('pending with ' + t.pendingWith);
-            return this.reportLine(t) + ' [' + bits.filter(Boolean).join(', ') + ']';
+        const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        const key = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const seen = new Set();
+        let dupes = 0;
+        const keep = (line) => { const k = key(line); if (!k) return false; if (seen.has(k)) { dupes++; return false; } seen.add(k); return true; };
+
+        const payRows = [];
+        d.payments.forEach(t => {
+            const line = this.reportLine(t);
+            if (!keep(line)) return;
+            const vendor = this.taskPayee(t);
+            const body = vendor && line.indexOf(vendor + ': ') === 0 ? line.slice(vendor.length + 2) : line;
+            payRows.push({ line: line, cols: [vendor || '—', body, t.category || ''], t: t });
         });
-        block('Routine daily activities', fixed, f => f);
-        block('Other activities', general, g => g.activity + (g.details ? ' — ' + g.details : ''));
-        if (!d.payments.length && !d.others.length && !d.followed.length && !fixed.length && !general.length) {
-            out.push(''); out.push('No completed or updated entries for this date.');
-        }
-        return { text: out.join('\n'), data: d };
+        const descRows = (list) => {
+            const out = [];
+            list.forEach(t => { const line = this.reportLine(t); if (keep(line)) out.push({ line: line, cols: [line, t.category || ''], t: t }); });
+            return out;
+        };
+        const otherRows = descRows(d.others);
+        const followRows = descRows(d.followed);
+        const fixRows = [];
+        (inputs.fixed || []).filter(Boolean).forEach(f => { if (keep(f)) fixRows.push({ line: clean(f), cols: [clean(f)] }); });
+        const genRows = [];
+        (inputs.general || []).filter(g => g && g.activity).forEach(g => {
+            const line = clean(g.activity) + (g.details ? ' — ' + clean(g.details) : '');
+            if (keep(line)) genRows.push({ line: line, cols: [line] });
+        });
+
+        return {
+            date: date, dupes: dupes, data: d,
+            sections: [
+                { key: 'pay', title: 'Payments', intro: payRows.length ? this.paymentIntroLines() : [], head: ['Vendor Name', 'Narration', 'Category'], widths: [30, 80, 20], rows: payRows },
+                { key: 'oth', title: 'Other work completed', head: ['Work done', 'Category'], widths: [30, 80], rows: otherRows },
+                { key: 'fol', title: 'Followed up / in progress', head: ['Work done', 'Category'], widths: [30, 80], rows: followRows },
+                { key: 'fix', title: 'Routine daily activities', head: ['Activity'], widths: [30], rows: fixRows },
+                { key: 'gen', title: 'Other activities', head: ['Activity'], widths: [30], rows: genRows }
+            ]
+        };
+    },
+
+    // Plain text: headings, "* " bullets (no serial numbers), payments first
+    // with the two standard lines, no mail chains anywhere.
+    buildDailyReportText(date, inputs) {
+        const m = this.buildReportModel(date, inputs);
+        const title = this.formatDateStr(date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        const out = ['Daily Activity Report — ' + title];
+        let any = false;
+        m.sections.forEach(s => {
+            if (!s.rows.length) return;
+            any = true;
+            out.push('');
+            out.push(s.title + (s.key === 'pay' ? ' (' + s.rows.length + ')' : ''));
+            if (s.intro && s.intro.length) {
+                s.intro.forEach((l, i) => { if (i) out.push(''); out.push('* ' + l); });
+            }
+            s.rows.forEach(r => out.push('* ' + r.line));
+        });
+        if (!any) { out.push(''); out.push('No completed or updated entries for this date.'); }
+        const cnt = (k) => (m.sections.find(s => s.key === k) || { rows: [] }).rows.length;
+        const data = Object.assign({}, m.data, {
+            payments: m.data.payments.slice(0, cnt('pay')), others: m.data.others.slice(0, cnt('oth')),
+            followed: m.data.followed.slice(0, cnt('fol')), dupes: m.dupes,
+            bullets: m.sections.reduce((a, s) => a + s.rows.length + (s.intro ? s.intro.length : 0), 0)
+        });
+        this._lastModel = m;
+        return { text: out.join('\n'), data: data };
     },
 
     generateDailyReport() {
@@ -609,7 +687,7 @@ const app = {
             if (info) {
                 info.style.display = 'block';
                 info.innerHTML = '<b>' + r.data.payments.length + '</b> payments · <b>' + r.data.others.length + '</b> other completed · <b>' + r.data.followed.length + '</b> followed up' +
-                    (r.data.excluded ? ' · ' + r.data.excluded + ' marked "Done" (not in report)' : '') + (note ? '<br>' + note : '');
+                    (r.data.excluded ? ' · ' + r.data.excluded + ' marked "Done" (not in report)' : '') + (r.data.dupes ? ' · ' + r.data.dupes + ' duplicate' + (r.data.dupes === 1 ? '' : 's') + ' removed' : '') + (note ? '<br>' + note : '');
             }
             return r;
         };
@@ -623,40 +701,52 @@ const app = {
             .then(data => {
                 if (!data || data.status !== 'success') throw new Error((data && data.message) || 'no inputs');
                 this._reportInputs = { fixed: data.fixed || [], general: data.general || [] };
-                show(this._reportInputs, '');
-                this.showToast('Report ready.', 'success');
+                show(this._reportInputs, 'Writing it in your style with AI…');
+                this.rewriteDailyReportWithAI(true);
             })
-            .catch(() => { this._reportInputs = {}; show({}, 'Routine / other activities could not be loaded from the sheet right now — the entries above are complete.'); });
+            .catch(() => { this._reportInputs = {}; show({}, 'Routine / other activities could not be loaded right now — showing the complete standard report.'); });
     },
 
     // Optional: Gemini rewrites the SAME report in your own style. The result
     // is checked — if a single entry went missing, it's rejected and the
     // complete report stays.
-    rewriteDailyReportWithAI() {
+    rewriteDailyReportWithAI(auto) {
         const rep = this._lastReport;
         const out = document.getElementById('dailyReportOutput');
+        const info = document.getElementById('dailyReportInfo');
         if (!rep) { this.showToast('Generate the report first.', 'warning'); return; }
         const btn = document.getElementById('darAiBtn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Rewriting…'; }
-        const must = rep.data.payments.concat(rep.data.others).map(t => {
-            const n = t.narration || {};
-            return String(n.docNo || '').trim() || String(this.payeeValue((this.lists.narrationTypes || []).find(x => x.name === n.typeName), n.fieldsValues) || '').trim() || String(t.description || '').trim().slice(0, 30);
-        }).filter(Boolean);
-        this.cloudRequest({ action: 'generateDailyReport', date: rep.date, draft: rep.text, itemCount: must.length })
+        if (btn) { btn.disabled = true; btn.textContent = 'Writing with AI…'; }
+        const m = this._lastModel;
+        const pay = m ? (m.sections.find(s => s.key === 'pay') || { rows: [] }).rows : [];
+        // Payment lines must come back exactly; others may be reworded.
+        const mustPay = pay.map(r => r.line);
+        const mails = this.tasks.map(t => String(t.mailChain || '').trim()).filter(x => x.length > 6);
+        const note = (txt) => { if (info) info.innerHTML = info.innerHTML.replace(/<br>.*$/, '') + '<br>' + txt; };
+        this.cloudRequest({ action: 'generateDailyReport', date: rep.date, draft: rep.text, itemCount: rep.data.bullets || 0, style: 'v2' })
             .then(data => {
                 if (!data || data.status !== 'success') throw new Error((data && data.message) || 'AI rewrite failed');
-                const text = String(data.report || '');
+                let text = String(data.report || '').replace(/^\s*\d+[.)]\s+/gm, '* ').replace(/^\s*[-•]\s+/gm, '* ').trim();
                 const norm = (s) => s.toLowerCase().replace(/\s+/g, ' ');
-                const missing = must.filter(m => norm(text).indexOf(norm(m)) === -1);
-                if (missing.length) {
-                    this.showToast('AI version dropped ' + missing.length + ' item(s) — kept the complete report instead.', 'warning');
+                const nt = norm(text);
+                const missing = mustPay.filter(l => nt.indexOf(norm(l)) === -1);
+                const bullets = (text.match(/^\* /gm) || []).length;
+                const leaked = mails.filter(x => nt.indexOf(norm(x)) !== -1);
+                if (missing.length || bullets < (rep.data.bullets || 0) || leaked.length) {
+                    note('AI version was not used (it ' + (missing.length ? 'changed ' + missing.length + ' payment line(s)' : bullets < rep.data.bullets ? 'dropped items' : 'added a mail chain') + ') — showing the complete standard report.');
+                    if (!auto) this.showToast('AI version rejected — kept the complete report.', 'warning');
                     return;
                 }
                 out.textContent = text;
-                this.showToast('Rewritten in your style — every item checked present.', 'success');
+                rep.aiText = text;
+                note('✨ AI-written — every payment line and item checked present.');
+                this.showToast('Report ready (AI-written).', 'success');
             })
-            .catch(err => this.showToast(err.message || 'AI rewrite failed — the complete report is still shown.', 'error'))
-            .finally(() => { if (btn) { btn.disabled = false; btn.textContent = '✨ Rewrite in my style (AI)'; } });
+            .catch(err => {
+                note('AI not available right now (' + this.sanitize((err && err.message) || 'error') + ') — showing the complete standard report.');
+                if (!auto) this.showToast(err.message || 'AI rewrite failed — the complete report is still shown.', 'error');
+            })
+            .finally(() => { if (btn) { btn.disabled = false; btn.textContent = '✨ Rewrite again with AI'; } });
     },
 
     // What actually goes into a report line for this task: the Tally
@@ -669,16 +759,8 @@ const app = {
         if (task && task.narration) {
             const rebuilt = this.narrationFor(task, 'report');
             if (rebuilt) return rebuilt;
-            if (task.narration.reportText) return task.narration.reportText;
-            if (task.narration.text) {
-                // Older entries saved before reportText existed: strip the
-                // Mail Chain back out of the already-built text.
-                let t = task.narration.text;
-                if (task.mailChain && t.indexOf(task.mailChain) !== -1) {
-                    t = t.split(task.mailChain).join('').trim();
-                }
-                return t;
-            }
+            if (task.narration.text) return task.narration.text;          // already includes the mail chain
+            if (task.narration.reportText) return task.narration.reportText + (task.mailChain ? ' ' + task.mailChain : '');
         }
         if (task && task.notes) return task.notes;
         return fallback || '';
@@ -776,32 +858,132 @@ const app = {
             .catch(() => this.showToast('Could not copy — select the text manually.', 'warning'));
     },
 
+    // Formatted Excel: title, summary, then one styled table per section
+    // (bold coloured headers, borders, wrapped text, set column widths,
+    // zebra rows, numbered), ready to print on A4 landscape.
     exportDailyReportExcel() {
-        const out = document.getElementById('dailyReportOutput');
-        const text = out ? out.textContent : '';
-        if (!text) { this.showToast('Generate a report first.', 'warning'); return; }
-        if (typeof XLSX === 'undefined') { this.showToast('Excel export library did not load — check your connection and try again.', 'error'); return; }
+        const m = this._lastModel;
+        if (!m) { this.showToast('Generate a report first.', 'warning'); return; }
+        const go = () => this.writeReportXlsx(m).catch(err => this.showToast('Excel export failed: ' + (err && err.message || err), 'error'));
+        if (window.ExcelJS) return go();
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+        s.onload = go;
+        s.onerror = () => this.showToast('Could not load the Excel library — check your connection and try again.', 'error');
+        document.head.appendChild(s);
+        this.showToast('Preparing Excel…', 'info');
+    },
 
-        const date = document.getElementById('dailyReportDate').value || this.getLocalDateStr(new Date());
-        const generatedAt = new Date().toLocaleString();
+    writeReportXlsx(m) {
+        // If the on-screen report is AI-written, use its wording for the
+        // non-payment sections (payment lines are identical either way).
+        const ai = this._lastReport && this._lastReport.aiText;
+        if (ai) {
+            const titles = m.sections.map(s => s.title.toLowerCase());
+            const got = {}; let cur = null;
+            ai.split('\n').forEach(l => {
+                const t = l.trim(); if (!t) return;
+                if (t.indexOf('* ') === 0) { if (cur) (got[cur] = got[cur] || []).push(t.slice(2).trim()); return; }
+                const i = titles.findIndex(x => t.toLowerCase().indexOf(x) === 0);
+                cur = i >= 0 ? m.sections[i].key : null;
+            });
+            m = Object.assign({}, m, { sections: m.sections.map(s => {
+                const lines = got[s.key];
+                if (s.key === 'pay' || !lines || lines.length !== s.rows.length) return s;
+                return Object.assign({}, s, { rows: s.rows.map((r, i) => Object.assign({}, r, { cols: [lines[i]].concat(r.cols.slice(1)) })) });
+            }) });
+        }
+        const wb = new ExcelJS.Workbook();
+        wb.creator = 'Banking Work Tracker';
+        const ws = wb.addWorksheet('Daily Report', {
+            pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } },
+            views: [{ showGridLines: false }]
+        });
+        const COLS = 4;   // "*" + up to 3 data columns
+        const widths = [4, 0, 0, 0];
+        m.sections.forEach(s => s.widths.forEach((w, i) => { widths[i + 1] = Math.max(widths[i + 1], w); }));
+        ws.columns = widths.map(w => ({ width: w || 14 }));
 
-        const rows = [
-            ['Daily Activity Report'],
-            ['Date', date],
-            ['Generated', generatedAt],
-            ['Profile', this.currentUser || ''],
-            [],
-            ['Report']
-        ];
-        text.split('\n').forEach(line => rows.push([line]));
+        const thin = { style: 'thin', color: { argb: 'FFB8C2D6' } };
+        const border = { top: thin, left: thin, bottom: thin, right: thin };
+        const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb: argb } });
+        const title = this.formatDateStr(m.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
-        const sheet = XLSX.utils.aoa_to_sheet(rows);
-        sheet['!cols'] = [{ wch: 100 }];
+        let r = ws.addRow(['Daily Activity Report']);
+        ws.mergeCells(r.number, 1, r.number, COLS);
+        r.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } }; r.height = 28;
+        r.getCell(1).fill = fill('FF1F4E79'); r.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        r = ws.addRow([title]);
+        ws.mergeCells(r.number, 1, r.number, COLS);
+        r.font = { size: 11, italic: true, color: { argb: 'FF1F4E79' } };
 
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, sheet, 'Daily Report');
-        XLSX.writeFile(workbook, `Daily_Activity_Report_${date}.xlsx`);
-        this.showToast('Excel file downloaded.', 'success');
+        // summary
+        ws.addRow([]);
+        const sumHead = ws.addRow(['', 'Summary', 'Count']);
+        [2, 3].forEach(c => { const cell = sumHead.getCell(c); cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; cell.fill = fill('FF2E75B6'); cell.border = border; });
+        m.sections.forEach(s => {
+            if (!s.rows.length) return;
+            const row = ws.addRow(['', s.title, s.rows.length]);
+            [2, 3].forEach(c => { row.getCell(c).border = border; });
+            row.getCell(3).alignment = { horizontal: 'center' };
+        });
+        if (m.dupes) {
+            const row = ws.addRow(['', 'Duplicates removed', m.dupes]);
+            [2, 3].forEach(c => { row.getCell(c).border = border; row.getCell(c).font = { italic: true, color: { argb: 'FF7F7F7F' } }; });
+            row.getCell(3).alignment = { horizontal: 'center' };
+        }
+
+        // sections
+        m.sections.forEach(s => {
+            if (!s.rows.length) return;
+            ws.addRow([]);
+            const t = ws.addRow([s.title + '  (' + s.rows.length + ')']);
+            ws.mergeCells(t.number, 1, t.number, COLS);
+            t.font = { size: 12, bold: true, color: { argb: 'FF1F4E79' } }; t.height = 20;
+            t.getCell(1).border = { bottom: { style: 'medium', color: { argb: 'FF1F4E79' } } };
+            (s.intro || []).forEach((line, li) => {
+                if (li) ws.addRow([]);
+                const ir = ws.addRow(['*', line]);
+                ws.mergeCells(ir.number, 2, ir.number, COLS);
+                ir.getCell(1).alignment = { vertical: 'top', horizontal: 'center' };
+                ir.getCell(2).alignment = { vertical: 'top', wrapText: true };
+                ir.getCell(2).font = { italic: true, color: { argb: 'FF1F3864' } };
+                ir.height = Math.max(18, Math.ceil(line.length / 120) * 15);
+            });
+            if (s.intro && s.intro.length) ws.addRow([]);
+            const h = ws.addRow([''].concat(s.head));
+            h.height = 20;
+            for (let c = 1; c <= s.head.length + 1; c++) {
+                const cell = h.getCell(c);
+                cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                cell.fill = fill('FF2E75B6'); cell.border = border;
+                cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'center' : 'left', wrapText: true };
+            }
+            s.rows.forEach((row, i) => {
+                const x = ws.addRow(['*'].concat(row.cols));
+                for (let c = 1; c <= s.head.length + 1; c++) {
+                    const cell = x.getCell(c);
+                    cell.border = border;
+                    cell.alignment = { vertical: 'top', horizontal: c === 1 ? 'center' : 'left', wrapText: true };
+                    if (i % 2 === 1) cell.fill = fill('FFF2F6FC');
+                }
+            });
+        });
+
+        ws.addRow([]);
+        const foot = ws.addRow(['Generated ' + new Date().toLocaleString('en-IN')]);
+        ws.mergeCells(foot.number, 1, foot.number, COLS);
+        foot.font = { size: 9, italic: true, color: { argb: 'FF7F7F7F' } };
+
+        return wb.xlsx.writeBuffer().then(buf => {
+            const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'Daily_Activity_Report_' + m.date + '.xlsx';
+            document.body.appendChild(a); a.click();
+            setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+            this.showToast('Excel report downloaded.', 'success');
+        });
     },
 
     /* ---------- REPORT STYLE SAMPLES ---------- */
@@ -1540,7 +1722,7 @@ const app = {
                 }
                 if (data.status === 'success') {
                     show(true, '<b>Connected ✓</b><br>Your sheet has <b>' + (data.taskCount || 0) + '</b> entries (tab ' + this.sanitize(data.sheet || '') + ').' +
-                        (data.scriptVersion && Number(data.scriptVersion) < 69 ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' — deploy the latest Code.gs as a New version.' : '') +
+                        (data.scriptVersion && Number(data.scriptVersion) < 70 ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' — deploy the latest Code.gs as a New version.' : '') +
                         '<br>Tap <b>Save Settings</b> to use this.');
                     return;
                 }
@@ -3898,7 +4080,7 @@ const app = {
         document.getElementById('screenTitle').textContent = titles[tab] || tab;
 
         document.body.classList.toggle('fab-on', ['Register', 'Dashboard', 'Completed', 'Holidays'].indexOf(tab) !== -1);
-        if (tab === 'Config') { this.renderLayoutPick(); this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
+        if (tab === 'Config') { this.renderPaymentIntroEditor(); this.renderLayoutPick(); this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
 
         this.renderTable();
     },
@@ -5011,6 +5193,40 @@ const app = {
         return (nr && label === nr.leadFieldLabel) || this.PAYEE_RX.test(String(label));
     },
 
+    // Vendor name hidden in a mail subject, e.g.
+    // "PURE EV: Purchase Order - G Power Auto Parts - INPO/PP/26-27/0155 - PURE Energy"
+    // → "G Power Auto Parts" (the part just before the PO / reference number).
+    payeeFromMail(mail) {
+        const s = String(mail || '').replace(/\s+/g, ' ').trim();
+        if (!s) return '';
+        const parts = s.split(/\s+[-–—|]\s+/).map(x => x.trim()).filter(Boolean);
+        const isRef = (p) => /[A-Z]{2,}[A-Z0-9]*\/[A-Z0-9/-]*\d/i.test(p) || /^(po|wo|inv|invoice|bill)\s*(no\.?|#|:)?\s*\d/i.test(p);
+        const isLabel = (p) => /:\s*$/.test(p) || (/(purchase|work|service)\s+order|^po$|^invoice$|^payment$|^re:|^fw:|^fwd:/i.test(p) && p.split(' ').length <= 5);
+        const i = parts.findIndex(isRef);
+        for (let j = i - 1; j >= 0; j--) { if (!isLabel(parts[j]) && !isRef(parts[j])) return parts[j]; }
+        const k = parts.findIndex(p => /(purchase|work|service)\s+order/i.test(p));
+        if (k >= 0 && parts[k + 1] && !isRef(parts[k + 1])) return parts[k + 1];
+        return '';
+    },
+
+    // Vendor for a task: the Name of Paye field, else the one in the mail chain.
+    taskPayee(t) {
+        const n = (t && t.narration) || {};
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
+        return String((nr && this.payeeValue(nr, n.fieldsValues)) || this.payeeFromMail(t && t.mailChain) || '').trim();
+    },
+
+    // Takes the vendor name out of a mail chain (for the Tally narration).
+    stripPayeeFromMail(mail, payee) {
+        let s = String(mail || '');
+        const p = String(payee || '').trim();
+        if (!s || !p) return s.trim();
+        const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        s = s.replace(new RegExp('\\s*[-–—|]\\s*' + esc + '(?=\\s*[-–—|]|\\s*$)', 'i'), '')
+             .replace(new RegExp(esc, 'i'), '');
+        return s.replace(/\s*[-–—|]\s*[-–—|]\s*/g, ' - ').replace(/^\s*[-–—|]\s*|\s*[-–—|]\s*$/g, '').replace(/\s+/g, ' ').trim();
+    },
+
     payeeValue(nr, fieldsValues) {
         fieldsValues = fieldsValues || {};
         const labels = (nr && nr.fields ? nr.fields.map(f => f.label) : []).concat(nr && nr.leadFieldLabel ? [nr.leadFieldLabel] : [])
@@ -5036,13 +5252,20 @@ const app = {
         text += (nr.phrase || '') + String(docNo || '').trim();
         [extraBits.join(' '), String(purpose || '').trim(), String(subCategoryText || '').trim()]
             .filter(Boolean).forEach(bit => { text += ' ' + bit; });
-        if (String(mailChain || '').trim()) text += ' ' + String(mailChain).trim();
+        if (String(mailChain || '').trim()) {
+            // never put the vendor name into the Tally narration — not even
+            // through the mail subject
+            const payee = this.payeeValue(nr, fieldsValues) || this.payeeFromMail(mailChain);
+            const mail = this.stripPayeeFromMail(mailChain, payee);
+            if (mail) text += ' ' + mail;
+        }
         return text.replace(/\s+/g, ' ').trim();
     },
 
     // Daily Activity Report line: "Payee Name: <narration without mail chain>".
-    buildNarrationReportText(nr, percent, docNo, purpose, fieldsValues, subCategoryText) {
-        const body = this.buildNarrationText(nr, percent, docNo, purpose, '', fieldsValues, subCategoryText);
+    // Report line for a payment: "Vendor Name: <narration with mail chain>".
+    buildNarrationReportText(nr, percent, docNo, purpose, fieldsValues, subCategoryText, mailChain) {
+        const body = this.buildNarrationText(nr, percent, docNo, purpose, mailChain || '', fieldsValues, subCategoryText);
         const payee = this.payeeValue(nr, fieldsValues);
         return payee ? payee + ': ' + body : body;
     },
@@ -5053,10 +5276,10 @@ const app = {
         const n = task && task.narration;
         if (!n) return '';
         const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
-        if (!nr) return kind === 'report' ? (n.reportText || n.text || '') : (n.text || '');
+        if (!nr) return n.text || n.reportText || '';
         const sub = n.subCategoryText !== undefined ? n.subCategoryText : this.subCategoryTextFor(task);
         return kind === 'report'
-            ? this.buildNarrationReportText(nr, n.percent, n.docNo, n.purpose, n.fieldsValues, sub)
+            ? this.buildNarrationReportText(nr, n.percent, n.docNo, n.purpose, n.fieldsValues, sub, task.mailChain)
             : this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, task.mailChain, n.fieldsValues, sub);
     },
 
