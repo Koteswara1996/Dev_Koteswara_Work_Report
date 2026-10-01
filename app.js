@@ -5254,8 +5254,8 @@ const app = {
         row.innerHTML = `
             <input type="text" class="kp-key nr-field-label" placeholder="Field label (e.g. Vendor Name)" value="${this.escAttr(label)}">
             <input type="text" class="kp-value nr-field-options" placeholder="Options, comma separated (blank = plain text)" value="${this.escAttr((options || []).join(', '))}">
-            <label style="display:flex; align-items:center; gap:4px; font-size:0.68rem; color:var(--label-2); white-space:nowrap; cursor:pointer; flex:0 0 auto;" title="Lead field: shown first as '&lt;value&gt; : ...' instead of 'Being ...', and the Mail Chain is left out">
-                <input type="radio" name="nrLeadField" class="nr-field-lead" style="width:auto;" ${isLead ? 'checked' : ''}> Lead
+            <label style="display:flex; align-items:center; gap:4px; font-size:0.68rem; color:var(--label-2); white-space:nowrap; cursor:pointer; flex:0 0 auto;" title="Lead field: leads the report line ('&lt;value&gt;: narration') and is kept out of the Tally narration. Tick as many fields as you need.">
+                <input type="checkbox" class="nr-field-lead" style="width:auto;" ${isLead ? 'checked' : ''}> Lead
             </label>
             <button type="button" class="btn-icon bad" onclick="this.closest('.nr-field-row').remove()" title="Remove">${this.SVGS.bin}</button>
         `;
@@ -5271,7 +5271,8 @@ const app = {
             return;
         }
         box.innerHTML = items.map(nr => {
-            const extra = (nr.fields || []).map(f => f.label + (f.label === nr.leadFieldLabel ? ' (lead)' : '')).join(', ');
+            const leads = this.leadLabels(nr);
+            const extra = (nr.fields || []).map(f => f.label + (leads.indexOf(f.label) !== -1 ? ' (lead)' : '')).join(', ');
             return `
             <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                 <div style="flex:1; min-width:0;">
@@ -5293,7 +5294,8 @@ const app = {
         document.getElementById('nrPhrase').value = nr.phrase;
         document.getElementById('nrDocLabel').value = nr.docLabel;
         document.getElementById('nrFieldRows').innerHTML = '';
-        (nr.fields || []).forEach(f => this.addNrFieldRow(f.label, f.options || [], f.label === nr.leadFieldLabel));
+        const leads = this.leadLabels(nr);
+        (nr.fields || []).forEach(f => this.addNrFieldRow(f.label, f.options || [], leads.indexOf(f.label) !== -1));
     },
 
     collectNrFields() {
@@ -5314,19 +5316,21 @@ const app = {
         const docLabel = document.getElementById('nrDocLabel').value.trim() || 'Document No';
         const collected = this.collectNrFields();
         const fields = collected.map(f => ({ label: f.label, options: f.options }));
-        const lead = collected.find(f => f.isLead);
-        const leadFieldLabel = lead ? lead.label : '';
+        // Any number of Lead fields; leadFieldLabel keeps the first one for
+        // copies of the app (and sheet data) from before multi-lead.
+        const leadFieldLabels = collected.filter(f => f.isLead).map(f => f.label);
+        const leadFieldLabel = leadFieldLabels[0] || '';
         if (!Array.isArray(this.lists.narrationTypes)) this.lists.narrationTypes = [];
 
         if (this.editingNrId) {
             const nr = this.lists.narrationTypes.find(x => String(x.id) === String(this.editingNrId));
-            if (nr) { nr.name = name; nr.hasPercent = hasPercent; nr.phrase = phrase; nr.docLabel = docLabel; nr.fields = fields; nr.leadFieldLabel = leadFieldLabel; }
+            if (nr) { nr.name = name; nr.hasPercent = hasPercent; nr.phrase = phrase; nr.docLabel = docLabel; nr.fields = fields; nr.leadFieldLabel = leadFieldLabel; nr.leadFieldLabels = leadFieldLabels; }
         } else {
             if (this.lists.narrationTypes.some(x => x.name.toLowerCase() === name.toLowerCase())) {
                 this.showToast('A narration type with that name already exists.', 'warning');
                 return;
             }
-            this.lists.narrationTypes.push({ id: this.newId(), name, hasPercent, phrase, docLabel, fields, leadFieldLabel });
+            this.lists.narrationTypes.push({ id: this.newId(), name, hasPercent, phrase, docLabel, fields, leadFieldLabel, leadFieldLabels });
         }
 
         this.saveLists();
@@ -5449,9 +5453,17 @@ const app = {
     // "Supplier GSTIN") are ordinary fields and go into the narration.
     PAYEE_RX: /^\s*(?:name\s+of\s+(?:the\s+)?)?(?:vendor|payee|paye|pay\s*to|party|beneficiary|supplier)(?:'?s)?(?:\s+name)?\s*:*\s*$/i,
 
+    // Lead fields of a narration type (several allowed; older types saved
+    // a single leadFieldLabel).
+    leadLabels(nr) {
+        if (!nr) return [];
+        if (Array.isArray(nr.leadFieldLabels)) return nr.leadFieldLabels.filter(Boolean);
+        return nr.leadFieldLabel ? [nr.leadFieldLabel] : [];
+    },
+
     isPayeeField(nr, label) {
         if (!label) return false;
-        return (nr && label === nr.leadFieldLabel) || this.PAYEE_RX.test(String(label));
+        return this.leadLabels(nr).indexOf(label) !== -1 || this.PAYEE_RX.test(String(label));
     },
 
     // Vendor name hidden in a mail subject, e.g.
@@ -5488,12 +5500,22 @@ const app = {
         return s.replace(/\s*[-–—|]\s*[-–—|]\s*/g, ' - ').replace(/^\s*[-–—|]\s*|\s*[-–—|]\s*$/g, '').replace(/\s+/g, ' ').trim();
     },
 
+    // Text that leads the report line: every filled Lead field, in the
+    // type's field order, joined with " - " (e.g. "Devi Cargo Movers -
+    // DCM01"); with no Lead fields, the first vendor-name field.
     payeeValue(nr, fieldsValues) {
         fieldsValues = fieldsValues || {};
-        const labels = (nr && nr.fields ? nr.fields.map(f => f.label) : []).concat(nr && nr.leadFieldLabel ? [nr.leadFieldLabel] : [])
-            .concat(Object.keys(fieldsValues));
+        const val = (l) => String(fieldsValues[l] || '').trim();
+        const leads = this.leadLabels(nr);
+        if (leads.length) {
+            const order = (nr.fields || []).map(f => f.label).filter(l => leads.indexOf(l) !== -1)
+                .concat(leads.filter(l => !(nr.fields || []).some(f => f.label === l)));
+            const got = order.map(val).filter(Boolean);
+            if (got.length) return got.join(' - ');
+        }
+        const labels = (nr && nr.fields ? nr.fields.map(f => f.label) : []).concat(Object.keys(fieldsValues));
         for (const l of labels) {
-            if (this.isPayeeField(nr, l) && String(fieldsValues[l] || '').trim()) return String(fieldsValues[l]).trim();
+            if (this.PAYEE_RX.test(String(l)) && val(l)) return val(l);
         }
         return '';
     },
