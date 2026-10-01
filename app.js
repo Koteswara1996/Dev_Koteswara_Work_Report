@@ -674,7 +674,13 @@ const app = {
         const payRows = [];
         d.payments.forEach(t => {
             const line = this.reportLine(t);
-            if (!keep(line, 'Payments')) return;
+            // Every payment is its own transaction — four payments to the
+            // same vendor are four lines, even when the narration reads the
+            // same. Payments are never dropped as duplicates; the line is
+            // only remembered so the same text elsewhere isn't repeated.
+            const k = key(line);
+            if (!k) return;
+            if (!seen.has(k)) seen.set(k, 'Payments');
             const vendor = this.taskPayee(t);
             const body = vendor && line.indexOf(vendor + ': ') === 0 ? line.slice(vendor.length + 2) : line;
             payRows.push({ line: line, cols: [vendor || '—', body, t.category || ''], t: t });
