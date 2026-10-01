@@ -7711,4 +7711,4 @@ const pwa = {
         }
     }
 };
-pwa.init();
+pwa.init();
