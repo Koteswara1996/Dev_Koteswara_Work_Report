@@ -571,6 +571,18 @@ const app = {
         return { payments: payments.sort(byTime), others: others.sort(byTime), followed: followed.sort(byTime), excluded: excluded };
     },
 
+    // Takes the mail chain (as typed, or with the vendor already cut out of
+    // it, as the Tally narration stores it) out of a line.
+    withoutMail(text, t) {
+        let s = String(text || '');
+        const mail = String((t && t.mailChain) || '').trim();
+        if (!mail) return s;
+        const variants = [mail, this.stripPayeeFromMail(mail, this.payeeFromMail(mail)), this.stripPayeeFromMail(mail, this.taskPayee(t))]
+            .filter(v => v && v.length > 3).sort((a, b) => b.length - a.length);
+        variants.forEach(v => { s = s.split(v).join(' '); });
+        return s.replace(/\s+/g, ' ').trim();
+    },
+
     reportLine(t) {
         const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
         if (this.isPaymentEntry(t)) {
@@ -579,18 +591,23 @@ const app = {
             const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
             let body = '';
             if (nr) {
-                const sub = n.subCategoryText !== undefined ? n.subCategoryText : this.subCategoryTextFor(t);
-                body = this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, '', n.fieldsValues, sub);
+                body = this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, '', n.fieldsValues, this.narrationSubText(t));
             } else if (n.reportText) {
                 body = n.reportText;
             } else if (n.text) {
-                body = t.mailChain ? String(n.text).split(String(t.mailChain).trim()).join('') : n.text;
+                body = this.withoutMail(n.text, t);
             } else {
                 body = t.description;
             }
-            body = clean(body);
+            const fromNarration = !!(nr || n.reportText || n.text);
+            body = clean(this.withoutMail(body, t));
             const payee = this.taskPayee(t);
-            if (payee && body.toLowerCase().indexOf(payee.toLowerCase() + ':') === 0) return body;
+            if (payee) {
+                // already "Vendor: …" → take the prefix off, it's added back below
+                if (body.toLowerCase().indexOf(payee.toLowerCase() + ':') === 0) body = clean(body.slice(payee.length + 1));
+                // the vendor leads the line — drop it (and a "Vendor Name:" label) from inside the narration
+                if (fromNarration) body = clean(body.replace(new RegExp('\\s*(?:(?:vendor|payee|party)\\s*(?:name)?\\s*:+)?\\s*' + payee.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[,;]?', 'i'), ' '));
+            }
             return payee ? payee + ': ' + body : body;
         }
         // every other task: the description, redesigned with whatever was
@@ -2504,6 +2521,11 @@ const app = {
                         <input type="time" id="reschedTime_${idAttr}" value="${this.escAttr(task.dueTime)}" style="font-size: 0.84rem; color: var(--label); background: transparent; border: none; outline: none; padding: 4px;">
                         <button type="button" class="btn-row go" data-action="alarm-reschedule" data-id="${idAttr}" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--blue-ink); background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.2); border-radius: 10px; cursor: pointer;">Move</button>
                     </span>
+                    <span class="alarm-field" title="Change this entry's status" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
+                        <select id="alarmStatus_${idAttr}" onchange="app.changeAlarmStatus('${idAttr}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--blue-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
+                            ${(this.lists.statuses || []).concat(this.lists.statuses.indexOf(task.status) === -1 && task.status ? [task.status] : []).map(st => `<option value="${this.escAttr(st)}"${st === task.status ? ' selected' : ''}>${this.sanitize(st)}</option>`).join('')}
+                        </select>
+                    </span>
                     <span class="alarm-field" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
                         <select id="alarmRec_${idAttr}" onchange="app.changeAlarmRecurrence('${idAttr}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--violet-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
                             <option value="None"${task.recurrence === 'None' || !task.recurrence ? ' selected' : ''}>Doesn't repeat</option>
@@ -2529,6 +2551,33 @@ const app = {
         this.saveData();
         this.renderTable();
         this.showToast('Recurrence set to ' + (task.recurrence === 'None' ? "doesn't repeat" : task.recurrence), 'success');
+    },
+
+    // Status straight from the overdue-alert card. "Completed" goes through
+    // the normal Mark done path (sub-category checks, report, recurrence);
+    // any other status is saved like the Edit form does, and the remark
+    // typed on the card is kept in Notes.
+    changeAlarmStatus(taskId, val) {
+        const task = this.findTask(taskId);
+        if (!task || !val || val === task.status) return;
+        if (val === 'Completed') { this.alarmAction('done', taskId); return; }
+        const remarkEl = document.getElementById('alarmRemarks_' + taskId);
+        const remark = remarkEl ? remarkEl.value.trim() : '';
+        if (remark) {
+            task.notes = (task.notes ? task.notes + '\n' : '') + '[' + this.formatDateStr(this.getLocalDateStr(new Date())) + '] ' + remark;
+            remarkEl.value = '';
+        }
+        const old = task.status;
+        task.status = val;
+        task.completedDate = null;
+        if (!this.isUnstartedStatus(val)) {
+            this.noteWork(task, val);
+            this.logTaskActivity(task, 'status-changed', this.reportDetailsFor(task, 'Status changed from "' + (old || '—') + '" to "' + val + '"'));
+        }
+        task.updatedAt = this.stamp();
+        this.saveData();
+        this.renderTable();
+        this.showToast('Status set to ' + val + '.', 'success');
     },
 
     acknowledgeDeadline(taskId) {
@@ -4947,6 +4996,7 @@ const app = {
     },
 
     updateConditionalFields() {
+        requestAnimationFrame(() => this.fitNarrationSpan && this.fitNarrationSpan());
         const cat = document.getElementById('taskCategory').value;
         const status = document.getElementById('taskStatus').value;
         const statusNorm = String(status || '').trim().toLowerCase();
@@ -5348,11 +5398,39 @@ const app = {
         const name = el ? el.value : '';
         const sc = (this.lists.subCategories || []).find(x => x.name === name);
         if (!sc || !sc.fields || !sc.fields.length) return '';
-        const vals = this.collectSubCategoryFields();
+        return this.subCategoryText(sc, this.collectSubCategoryFields());
+    },
+
+    // "Label: value" for each filled Sub Category field — except the
+    // vendor / payee field, which never goes into the narration (it leads
+    // the report line instead). A label typed with its own colon
+    // ("Vendor Name:") no longer comes out as "Vendor Name::".
+    subCategoryText(sc, vals) {
+        if (!sc || !sc.fields || !sc.fields.length) return '';
+        vals = vals || {};
         return sc.fields.map(f => {
+            if (this.PAYEE_RX.test(String(f.label || ''))) return '';
             const v = (vals[f.label] || '').toString().trim();
-            return v ? (f.label + ': ' + v) : '';
+            return v ? (String(f.label).replace(/[\s:]+$/, '') + ': ' + v) : '';
         }).filter(Boolean).join(', ');
+    },
+
+    // Vendor typed into a Sub Category field (e.g. COD Charges → "Vendor Name").
+    subCategoryPayee(task) {
+        const sc = (this.lists.subCategories || []).find(x => x.name === (task && task.subCategory));
+        if (!sc || !sc.fields) return '';
+        const vals = (task && task.subCategoryFields) || {};
+        const f = sc.fields.find(x => this.PAYEE_RX.test(String(x.label || '')) && String(vals[x.label] || '').trim());
+        return f ? String(vals[f.label]).trim() : '';
+    },
+
+    // Sub Category part of a saved narration, rebuilt with the current rules
+    // when the Sub Category is known on this device.
+    narrationSubText(task) {
+        const sc = (this.lists.subCategories || []).find(x => x.name === task.subCategory);
+        if (sc) return this.subCategoryText(sc, task.subCategoryFields);
+        const n = task.narration || {};
+        return n.subCategoryText !== undefined ? n.subCategoryText : '';
     },
 
     /* Payee fields (the type's lead field, or any field named like
@@ -5386,7 +5464,7 @@ const app = {
     taskPayee(t) {
         const n = (t && t.narration) || {};
         const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
-        return String((nr && this.payeeValue(nr, n.fieldsValues)) || this.payeeFromMail(t && t.mailChain) || '').trim();
+        return String((nr && this.payeeValue(nr, n.fieldsValues)) || this.subCategoryPayee(t) || this.payeeFromMail(t && t.mailChain) || '').trim();
     },
 
     // Takes the vendor name out of a mail chain (for the Tally narration).
@@ -5450,25 +5528,42 @@ const app = {
         if (!n) return '';
         const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
         if (!nr) return n.text || n.reportText || '';
-        const sub = n.subCategoryText !== undefined ? n.subCategoryText : this.subCategoryTextFor(task);
+        const sub = this.narrationSubText(task);
+        const mail = n.includeMail === false ? '' : task.mailChain;
         return kind === 'report'
-            ? this.buildNarrationReportText(nr, n.percent, n.docNo, n.purpose, n.fieldsValues, sub, task.mailChain)
-            : this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, task.mailChain, n.fieldsValues, sub);
+            ? this.buildNarrationReportText(nr, n.percent, n.docNo, n.purpose, n.fieldsValues, sub, mail)
+            : this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, mail, n.fieldsValues, sub);
     },
 
     subCategoryTextFor(task) {
         const sc = (this.lists.subCategories || []).find(x => x.name === task.subCategory);
-        if (!sc || !sc.fields || !sc.fields.length) return '';
-        const vals = task.subCategoryFields || {};
-        return sc.fields.map(f => { const v = String(vals[f.label] || '').trim(); return v ? f.label + ': ' + v : ''; }).filter(Boolean).join(', ');
+        return this.subCategoryText(sc, task.subCategoryFields);
+    },
+
+    // Generated Narration stretches to the end of whatever row it lands on,
+    // so there is never an empty cell beside it.
+    fitNarrationSpan() {
+        const el = document.getElementById('narrationPreviewGroup');
+        const grid = el && el.parentElement;
+        if (!el || !grid) return;
+        el.style.gridColumn = '';
+        if (el.style.display === 'none' || !grid.clientWidth) return;
+        const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
+        if (cols < 3) return;
+        const g = grid.getBoundingClientRect(), r = el.getBoundingClientRect();
+        const colW = g.width / cols;
+        const start = Math.round((r.left - g.left) / colW);
+        const span = cols - start;
+        if (span > 2) el.style.gridColumn = 'span ' + span;
     },
 
     updateNarrationPreview() {
+        requestAnimationFrame(() => this.fitNarrationSpan());
         const preview = document.getElementById('narrationPreview');
         if (!preview) return;
         const name = document.getElementById('taskNarrationType').value;
         const nr = (this.lists.narrationTypes || []).find(x => x.name === name);
-        const mailChain = document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value : '';
+        const mailChain = this.narrationIncludesMail() && document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value : '';
         preview.value = nr ? this.buildNarrationText(
             nr,
             document.getElementById('narrationPercent') ? document.getElementById('narrationPercent').value : '',
@@ -5480,6 +5575,12 @@ const app = {
         ) : '';
     },
 
+    // "Include mail chain" tick beside Generated Narration (default on).
+    narrationIncludesMail() {
+        const el = document.getElementById('narrationIncludeMail');
+        return !el || el.checked;
+    },
+
     // Reads the form into a narration object to store on the task, or null
     // if no Narration Type is selected (the feature is entirely optional).
     collectNarration() {
@@ -5489,11 +5590,12 @@ const app = {
         const percent = document.getElementById('narrationPercent') ? document.getElementById('narrationPercent').value.trim() : '';
         const docNo = document.getElementById('narrationDocNo') ? document.getElementById('narrationDocNo').value.trim() : '';
         const purpose = document.getElementById('narrationPurpose') ? document.getElementById('narrationPurpose').value.trim() : '';
-        const mailChain = document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value.trim() : '';
+        const includeMail = this.narrationIncludesMail();
+        const mailChain = includeMail && document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value.trim() : '';
         const fieldsValues = this.collectNarrationExtraFields();
         const subCategoryText = this.currentSubCategoryFieldsText();
         return {
-            typeId: nr.id, typeName: nr.name, percent, docNo, purpose, fieldsValues, subCategoryText,
+            typeId: nr.id, typeName: nr.name, percent, docNo, purpose, fieldsValues, subCategoryText, includeMail,
             // Tally text (with Mail Chain, without payee) for Copy Narration.
             text: this.buildNarrationText(nr, percent, docNo, purpose, mailChain, fieldsValues, subCategoryText),
             // Daily Activity Report: "Payee: narration" without Mail Chain.
@@ -5509,6 +5611,8 @@ const app = {
         document.getElementById('narrationPercent').value = narration ? (narration.percent || '') : '';
         document.getElementById('narrationDocNo').value = narration ? (narration.docNo || '') : '';
         document.getElementById('narrationPurpose').value = narration ? (narration.purpose || '') : '';
+        const incl = document.getElementById('narrationIncludeMail');
+        if (incl) incl.checked = !(narration && narration.includeMail === false);
         const nr = (this.lists.narrationTypes || []).find(x => x.name === (narration && narration.typeName));
         this.renderNarrationExtraFields(nr, narration ? narration.fieldsValues : {});
         this.updateNarrationPreview();
