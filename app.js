@@ -592,8 +592,47 @@ const app = {
             if (payee && body.toLowerCase().indexOf(payee.toLowerCase() + ':') === 0) return body;
             return payee ? payee + ': ' + body : body;
         }
-        // every other task: one line — the description only
-        return clean(t.description);
+        // every other task: the description, redesigned with whatever was
+        // written in Notes (what was actually done / the outcome), so the
+        // report line says the real work, not just the task title.
+        return this.reportTaskWithNotes(t);
+    },
+
+    // Turns the Notes into clean report sentences: drops the "[1 Oct 2026]"
+    // stamps that Past Due remarks add, duplicate lines, and lines that just
+    // repeat the task title. Then reads "Title: what was done."
+    notesForReport(t) {
+        const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        const key = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const title = key(t.description);
+        const seen = new Set();
+        const out = [];
+        String(t.notes || '').split(/\r?\n+/).forEach(raw => {
+            let l = clean(raw)
+                .replace(/^\[[^\]]{3,40}\]\s*/, '')          // [date] stamp
+                .replace(/^(?:[-*•>]+|\d+[.)])\s*/, '')        // bullets / numbering
+                .replace(/^(?:notes?|remarks?)\s*[:\-–]\s*/i, '');
+            if (t.mailChain && String(t.mailChain).trim()) l = clean(l.split(String(t.mailChain).trim()).join(''));
+            const k = key(l);
+            if (!k || k === title || seen.has(k)) return;
+            seen.add(k);
+            l = l.charAt(0).toUpperCase() + l.slice(1);
+            if (!/[.!?]$/.test(l)) l += '.';
+            out.push(l);
+        });
+        return out;
+    },
+
+    reportTaskWithNotes(t) {
+        const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        const desc = clean(t.description).replace(/[.:;,\s]+$/, '');
+        const notes = this.notesForReport(t);
+        if (!notes.length) return desc;
+        if (!desc) return notes.join(' ');
+        // Notes that already restate the task in full replace the title.
+        const joined = notes.join(' ');
+        if (joined.toLowerCase().indexOf(desc.toLowerCase()) === 0) return joined;
+        return desc + ': ' + joined;
     },
 
     // One model drives both the on-screen text and the Excel file, so they
@@ -634,8 +673,9 @@ const app = {
         return {
             date: date, dupes: dupes, data: d,
             sections: [
-                { key: 'pay', title: 'Payments', intro: payRows.length ? this.paymentIntroLines() : [], head: ['Vendor Name', 'Narration', 'Category'], widths: [30, 80, 20], rows: payRows },
+                // Other work completed first, then Domestic / Urgent payments.
                 { key: 'oth', title: 'Other work completed', head: ['Work done', 'Category'], widths: [30, 80], rows: otherRows },
+                { key: 'pay', title: 'Payments', intro: payRows.length ? this.paymentIntroLines() : [], head: ['Vendor Name', 'Narration', 'Category'], widths: [30, 80, 20], rows: payRows },
                 { key: 'fol', title: 'Followed up / in progress', head: ['Work done', 'Category'], widths: [30, 80], rows: followRows },
                 { key: 'fix', title: 'Routine daily activities', head: ['Activity'], widths: [30], rows: fixRows },
                 { key: 'gen', title: 'Other activities', head: ['Activity'], widths: [30], rows: genRows }
@@ -643,8 +683,9 @@ const app = {
         };
     },
 
-    // Plain text: headings, "* " bullets (no serial numbers), payments first
-    // with the two standard lines, no mail chains anywhere.
+    // Plain text: headings, "* " bullets (no serial numbers), other work
+    // completed first, then payments with the two standard lines, no mail
+    // chains anywhere.
     buildDailyReportText(date, inputs) {
         const m = this.buildReportModel(date, inputs);
         const title = this.formatDateStr(date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
@@ -1050,6 +1091,38 @@ const app = {
         const first = document.querySelector('.cfg-nav-item')?.dataset.cfgPanel;
         this.setCfgActivePanel(last || first, false);
         shell.classList.remove('showing-panel'); // always start at the list on mobile
+        this.bindCfgScrollSpy();
+    },
+
+    // Desktop: the jump bar stays pinned on top while scrolling, sections
+    // pass cleanly under it, and the highlighted item follows the section
+    // you're reading as you scroll up or down.
+    bindCfgScrollSpy() {
+        const box = document.getElementById('configTab');
+        const nav = document.getElementById('cfgNav');
+        if (!box || !nav) return;
+        const measure = () => box.style.setProperty('--cfg-nav-h', nav.offsetHeight + 'px');
+        measure();
+        if (this._cfgSpyBound) return;
+        this._cfgSpyBound = true;
+        let ticking = false;
+        const spy = () => {
+            ticking = false;
+            if (document.documentElement.getAttribute('data-shell') !== 'desktop') return;
+            if (Date.now() < (this._cfgJumpUntil || 0)) return;
+            const line = nav.getBoundingClientRect().bottom + 16;
+            let best = null, bestTop = -Infinity;
+            document.querySelectorAll('#cfgPanels .cfg-panel').forEach(el => {
+                const r = el.getBoundingClientRect();
+                if (r.height && r.top <= line && r.top > bestTop) { bestTop = r.top; best = el; }
+            });
+            if (!best) best = document.querySelector('#cfgPanels .cfg-panel');
+            if (!best) return;
+            const slug = best.dataset.cfgPanel;
+            nav.querySelectorAll('.cfg-nav-item').forEach(el => el.classList.toggle('active', el.dataset.cfgPanel === slug));
+        };
+        box.addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(spy); } }, { passive: true });
+        window.addEventListener('resize', measure, { passive: true });
     },
 
     setCfgActivePanel(slug, persist = true) {
@@ -1067,6 +1140,9 @@ const app = {
         if (document.documentElement.getAttribute('data-shell') === 'desktop') {
             const el = document.querySelector('.cfg-panel[data-cfg-panel="' + slug + '"]');
             if (el) {
+                this._cfgJumpUntil = Date.now() + 900;
+                const nav = document.getElementById('cfgNav'), box = document.getElementById('configTab');
+                if (nav && box) box.style.setProperty('--cfg-nav-h', nav.offsetHeight + 'px');
                 el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 el.classList.add('flash');
                 setTimeout(() => el.classList.remove('flash'), 1200);
