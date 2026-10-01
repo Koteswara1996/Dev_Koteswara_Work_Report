@@ -1041,6 +1041,19 @@
         }
         .due-hint.ok { color: var(--green-ink); background: rgba(52,199,89,0.10); border-color: rgba(52,199,89,0.24); }
         .due-hint.clash { color: var(--red-ink); background: rgba(255,59,48,0.10); border-color: rgba(255,59,48,0.24); }
+        /* Every inline status message in the app uses this same box as
+           the due-date hints above: soft tinted panel, rounded, small bold
+           text. Hidden while empty. Tones: default info (blue), .ok green,
+           .warn amber, .clash / .bad red. */
+        .msg-box {
+            display: block; margin: 10px 0 0; padding: 10px 12px; border-radius: 12px;
+            font-size: 0.82rem; font-weight: 600; line-height: 1.5;
+            color: var(--blue-ink); background: rgba(0,122,255,0.08); border: 1px solid rgba(0,122,255,0.22);
+        }
+        .msg-box:empty { display: none !important; }
+        .msg-box.ok { color: var(--green-ink); background: rgba(52,199,89,0.10); border-color: rgba(52,199,89,0.24); }
+        .msg-box.warn { color: var(--amber-ink); background: rgba(255,149,0,0.10); border-color: rgba(255,149,0,0.24); }
+        .msg-box.clash, .msg-box.bad { color: var(--red-ink); background: rgba(255,59,48,0.10); border-color: rgba(255,59,48,0.24); }
         .due-hint button {
             padding: 5px 11px; border-radius: 9px; cursor: pointer; font-size: 0.78rem; font-weight: 800;
             color: var(--blue-ink); background: rgba(0,122,255,0.10); border: 1px solid rgba(0,122,255,0.24);
@@ -2030,7 +2043,7 @@
                     <button type="button" data-shell="desktop" onclick="app.setShellPref('desktop')">🖥 Desktop</button>
                     <button type="button" data-shell="mobile" onclick="app.setShellPref('mobile')">📱 Mobile</button>
                 </div>
-                <div class="cfg-hint" id="layoutPickHint" style="margin-top:6px;"></div>
+                <div class="msg-box" id="layoutPickHint"></div>
             </div>
             <div class="theme-row">
                 <button class="theme-btn" data-theme="pearl" onclick="app.applyTheme('pearl')">⚪ Pearl</button>
@@ -2080,7 +2093,7 @@
                 <input autocomplete="off" type="date" id="dailyReportDate" style="grid-column: 1 / -1;">
                 <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.generateDailyReport()">Generate report</button>
             </div>
-            <div id="dailyReportInfo" class="cfg-hint" style="display:none; margin-top:10px;"></div>
+            <div id="dailyReportInfo" class="msg-box" style="display:none;"></div>
             <details class="dar-intro">
                 <summary>Standard lines before payments (Domestic / Urgent)</summary>
                 <textarea id="darIntro1" rows="2"></textarea>
@@ -2120,7 +2133,7 @@
                 <button class="sheet-item" onclick="app.restoreFromCloud()"><span class="ico">⤓</span>Restore</button>
                 <button class="sheet-item" onclick="app.openSyncSetup()"><span class="ico">🔗</span>Connection</button>
             </div>
-            <p class="cfg-hint" id="syncHealth" style="margin:14px 0 0; line-height:1.7;"></p>
+            <p class="msg-box" id="syncHealth" style="line-height:1.7;"></p>
             <p class="cfg-hint" style="margin:6px 0 0;">All your devices share one set of entries — just paste the same script URL on each. If Google is busy for a moment, sync retries on its own.</p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgDataBackup" data-cfg-panel="cfgDataBackup">
@@ -2146,7 +2159,7 @@
                 <label class="walk-field">Every (min)<input autocomplete="off" type="number" min="10" step="5" id="walkEvery" onchange="app.saveNudgeCfg('walk', { every: Number(this.value) })"></label>
                 <button class="sheet-item" onclick="app.triggerNudge('walk')"><span class="ico">🔔</span>Preview</button>
             </div>
-            <p class="cfg-hint" id="walkNextHint" style="margin: 12px 0 0;"></p>
+            <p class="msg-box" id="walkNextHint"></p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgWaterReminder" data-cfg-panel="cfgWaterReminder">
             <div class="dash-title">Water Reminder</div>
@@ -2158,7 +2171,7 @@
                 <label class="walk-field">Every (min)<input autocomplete="off" type="number" min="10" step="5" id="waterEvery" onchange="app.saveNudgeCfg('water', { every: Number(this.value) })"></label>
                 <button class="sheet-item" onclick="app.triggerNudge('water')"><span class="ico">🔔</span>Preview</button>
             </div>
-            <p class="cfg-hint" id="waterNextHint" style="margin: 12px 0 0;"></p>
+            <p class="msg-box" id="waterNextHint"></p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgTimeSlots" data-cfg-panel="cfgTimeSlots">
             <div class="dash-title">Time Slots</div>
@@ -2167,7 +2180,7 @@
                 <button class="sheet-item walk-toggle" id="slotToggle" onclick="app.toggleSlots()"><span class="ico">⏱️</span><span id="slotToggleLabel">Holding on</span></button>
                 <label class="walk-field">Hold for (min)<input autocomplete="off" type="number" min="1" max="240" step="5" id="slotMinutes" onchange="app.saveSlotCfg({ minutes: Number(this.value) })"></label>
             </div>
-            <p class="cfg-hint" id="slotHint" style="margin: 12px 0 0;"></p>
+            <p class="msg-box" id="slotHint"></p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgToolsSettings" data-cfg-panel="cfgToolsSettings">
             <div class="dash-title">Settings & Tools</div>
@@ -2186,7 +2199,7 @@
                 <button class="sheet-item" onclick="pwa.clearCache()"><span class="ico">🧹</span>Clear Cache</button>
             </div>
             <p class="cfg-hint" id="swVersion" style="margin: 14px 0 0;"></p>
-            <p class="cfg-hint" id="installHint" style="margin: 6px 0 0;"></p>
+            <p class="msg-box" id="installHint"></p>
         </div>
             </div>
         </div>
@@ -2530,7 +2543,7 @@
                     <button type="button" class="btn-modal secondary" onclick="rt.signOut()">Sign out</button>
                     <button type="button" class="btn-modal danger" onclick="document.getElementById('fbConfigInput').value=''; rt.disconnect()">Turn off</button>
                 </div>
-                <div class="cfg-hint" id="rtStatus" style="margin-top:8px;"></div>
+                <div class="msg-box" id="rtStatus"></div>
             </div>
             <div class="form-group">
                 <label>Apps Script Web App URL <span class="lbl-note">(Gmail, AI report, Sheet backup)</span></label>

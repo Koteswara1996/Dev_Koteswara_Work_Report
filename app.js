@@ -465,6 +465,7 @@ const app = {
         const pending = ((this._tomb || { pending: [] }).pending || []).length;
         const live = this.tasks.filter(t => !t.deleted).length;
         const skew = Math.round((this.clockOffset || 0) / 1000);
+        box.classList.toggle('warn', !!h.fails);
         box.innerHTML =
             '<b>On this device:</b> ' + live + ' entries (' + this.tasks.filter(t => t.deleted).length + ' in Bin)' +
             '<br><b>Last successful sync:</b> ' + fmt(h.lastOk) +
@@ -643,35 +644,41 @@ const app = {
         const d = this.collectReportData(date);
         const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
         const key = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-        const seen = new Set();
-        let dupes = 0;
-        const keep = (line) => { const k = key(line); if (!k) return false; if (seen.has(k)) { dupes++; return false; } seen.add(k); return true; };
+        // seen: line key -> section it was kept in; every removed duplicate
+        // is listed (for the "Duplicates Removed" sheet in the Excel file).
+        const seen = new Map();
+        const dupeList = [];
+        const keep = (line, sec) => {
+            const k = key(line); if (!k) return false;
+            if (seen.has(k)) { dupeList.push({ line: clean(line), section: sec, keptIn: seen.get(k) }); return false; }
+            seen.set(k, sec); return true;
+        };
 
         const payRows = [];
         d.payments.forEach(t => {
             const line = this.reportLine(t);
-            if (!keep(line)) return;
+            if (!keep(line, 'Payments')) return;
             const vendor = this.taskPayee(t);
             const body = vendor && line.indexOf(vendor + ': ') === 0 ? line.slice(vendor.length + 2) : line;
             payRows.push({ line: line, cols: [vendor || '—', body, t.category || ''], t: t });
         });
-        const descRows = (list) => {
+        const descRows = (list, sec) => {
             const out = [];
-            list.forEach(t => { const line = this.reportLine(t); if (keep(line)) out.push({ line: line, cols: [line, t.category || ''], t: t }); });
+            list.forEach(t => { const line = this.reportLine(t); if (keep(line, sec)) out.push({ line: line, cols: [line, t.category || ''], t: t }); });
             return out;
         };
-        const otherRows = descRows(d.others);
-        const followRows = descRows(d.followed);
+        const otherRows = descRows(d.others, 'Other work completed');
+        const followRows = descRows(d.followed, 'Followed up / in progress');
         const fixRows = [];
-        (inputs.fixed || []).filter(Boolean).forEach(f => { if (keep(f)) fixRows.push({ line: clean(f), cols: [clean(f)] }); });
+        (inputs.fixed || []).filter(Boolean).forEach(f => { if (keep(f, 'Routine daily activities')) fixRows.push({ line: clean(f), cols: [clean(f)] }); });
         const genRows = [];
         (inputs.general || []).filter(g => g && g.activity).forEach(g => {
             const line = clean(g.activity) + (g.details ? ' — ' + clean(g.details) : '');
-            if (keep(line)) genRows.push({ line: line, cols: [line] });
+            if (keep(line, 'Other activities')) genRows.push({ line: line, cols: [line] });
         });
 
         return {
-            date: date, dupes: dupes, data: d,
+            date: date, dupes: dupeList.length, dupeList: dupeList, data: d,
             sections: [
                 // Other work completed first, then Domestic / Urgent payments.
                 { key: 'oth', title: 'Other work completed', head: ['Work done', 'Category'], widths: [30, 80], rows: otherRows },
@@ -698,8 +705,12 @@ const app = {
             out.push(s.title + (s.key === 'pay' ? ' (' + s.rows.length + ')' : ''));
             if (s.intro && s.intro.length) {
                 s.intro.forEach((l, i) => { if (i) out.push(''); out.push('* ' + l); });
+                out.push('');
             }
-            s.rows.forEach(r => out.push('* ' + r.line));
+            // One blank line between every task; payment lines stay tight
+            // here (plain text has no half line) — the on-screen view,
+            // the copied report and the Excel file give them a half line.
+            s.rows.forEach((r, i) => { if (i && s.key !== 'pay') out.push(''); out.push('* ' + r.line); });
         });
         if (!any) { out.push(''); out.push('No completed or updated entries for this date.'); }
         const cnt = (k) => (m.sections.find(s => s.key === k) || { rows: [] }).rows.length;
@@ -722,7 +733,7 @@ const app = {
         const show = (inputs, note) => {
             const r = this.buildDailyReportText(date, inputs);
             out.style.display = 'block';
-            out.textContent = r.text;
+            this.renderReportOutput(out, r.text);
             actions.style.display = 'grid';
             this._lastReport = { date: date, text: r.text, data: r.data };
             if (info) {
@@ -778,7 +789,7 @@ const app = {
                     if (!auto) this.showToast('AI version rejected — kept the complete report.', 'warning');
                     return;
                 }
-                out.textContent = text;
+                this.renderReportOutput(out, text);
                 rep.aiText = text;
                 note('✨ AI-written — every payment line and item checked present.');
                 this.showToast('Report ready (AI-written).', 'success');
@@ -890,11 +901,53 @@ const app = {
             .then(() => this.showToast('Resynced ' + matches.length + ' completed ' + (matches.length === 1 ? 'entry' : 'entries') + ' for ' + date + ' — generate the report now.', 'success'));
     },
 
+    // Report text -> HTML with the house spacing: a full line between
+    // tasks, a half line between Domestic / Urgent payment lines.
+    reportTextToHtml(text) {
+        const esc = (x) => this.sanitize(x);
+        const titles = ['other work completed', 'payments', 'followed up', 'routine daily activities', 'other activities'];
+        let inPay = false, prevBullet = false, blank = false;
+        const html = [];
+        String(text || '').split('\n').forEach((raw, i) => {
+            const l = raw.trim();
+            if (!l) { blank = true; return; }      // spacing comes from the margins below
+            const wasBlank = blank; blank = false;
+            if (l.indexOf('* ') === 0) {
+                // payment lines that follow each other directly: half a line
+                const gap = !prevBullet ? 0 : (inPay && !wasBlank) ? 0.5 : 1;
+                html.push('<div style="margin-top:' + gap + 'em;padding-left:1.1em;text-indent:-1.1em;">•&nbsp; ' + esc(l.slice(2)) + '</div>');
+                prevBullet = true;
+                return;
+            }
+            const low = l.toLowerCase();
+            if (titles.some(x => low.indexOf(x) === 0)) inPay = low.indexOf('payments') === 0;
+            html.push('<div style="margin-top:' + (i ? 1 : 0) + 'em;font-weight:' + (i ? 700 : 800) + ';">' + esc(l) + '</div>');
+            prevBullet = false;
+        });
+        return html.join('');
+    },
+
+    renderReportOutput(out, text) {
+        out._reportText = text;
+        out.style.whiteSpace = 'normal';
+        out.innerHTML = this.reportTextToHtml(text);
+    },
+
     copyDailyReport() {
         const out = document.getElementById('dailyReportOutput');
-        const text = out ? out.textContent : '';
+        const text = out ? (out._reportText || out.textContent) : '';
         if (!text) return;
-        navigator.clipboard.writeText(text)
+        // Rich copy keeps the full-line / half-line spacing when pasted into
+        // Outlook or Gmail; plain text is the fallback.
+        const html = '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;">' + this.reportTextToHtml(text) + '</div>';
+        let p;
+        try {
+            p = navigator.clipboard.write([new ClipboardItem({
+                'text/html': new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([text], { type: 'text/plain' })
+            })]);
+        } catch (e) { p = Promise.reject(e); }
+        p.catch(() => navigator.clipboard.writeText(text))
             .then(() => this.showToast('Report copied.', 'success'))
             .catch(() => this.showToast('Could not copy — select the text manually.', 'warning'));
     },
@@ -936,19 +989,29 @@ const app = {
         }
         const wb = new ExcelJS.Workbook();
         wb.creator = 'Banking Work Tracker';
+        // Layout follows the house template (Daily_Activity_Report_*.xlsx):
+        // A "*" | B 30 | C 47.36; title bar, summary, "Dear Sir" greeting,
+        // then the lines with no section headings. Text rows are 23 high
+        // (taller only when the text wraps), a blank line between tasks and
+        // a half line between Domestic / Urgent payment lines.
         const ws = wb.addWorksheet('Daily Report', {
             pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } },
             views: [{ showGridLines: false }]
         });
-        const COLS = 4;   // "*" + up to 3 data columns
-        const widths = [4, 0, 0, 0];
-        m.sections.forEach(s => s.widths.forEach((w, i) => { widths[i + 1] = Math.max(widths[i + 1], w); }));
-        ws.columns = widths.map(w => ({ width: w || 14 }));
+        const COLS = 3;
+        const W = [4, 30, 47.36328125];
+        ws.columns = W.map(w => ({ width: w }));
+        const ROW_H = 23, LINE_H = 14.5, HALF_H = 7.25;
 
         const thin = { style: 'thin', color: { argb: 'FFB8C2D6' } };
         const border = { top: thin, left: thin, bottom: thin, right: thin };
         const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb: argb } });
+        const white = fill('FFFFFFFF');
+        const black = { size: 11, color: { argb: 'FF000000' } };
         const title = this.formatDateStr(m.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        // Rough wrapped-line count for a cell of the given column width.
+        const lines = (txt, width) => String(txt || '').split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / Math.max(1, width * 1.15))), 0);
+        const fitH = (n) => Math.max(ROW_H, n * LINE_H + 1);
 
         let r = ws.addRow(['Daily Activity Report']);
         ws.mergeCells(r.number, 1, r.number, COLS);
@@ -956,57 +1019,64 @@ const app = {
         r.getCell(1).fill = fill('FF1F4E79'); r.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
         r = ws.addRow([title]);
         ws.mergeCells(r.number, 1, r.number, COLS);
-        r.font = { size: 11, italic: true, color: { argb: 'FF1F4E79' } };
+        r.font = { size: 11, italic: true, color: { argb: 'FF1F4E79' } }; r.height = ROW_H;
+        r.getCell(1).alignment = { vertical: 'middle' };
 
         // summary
         ws.addRow([]);
         const sumHead = ws.addRow(['', 'Summary', 'Count']);
-        [2, 3].forEach(c => { const cell = sumHead.getCell(c); cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; cell.fill = fill('FF2E75B6'); cell.border = border; });
+        sumHead.height = ROW_H;
+        [2, 3].forEach(c => { const cell = sumHead.getCell(c); cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; cell.fill = fill('FF2E75B6'); cell.border = border; cell.alignment = { vertical: 'middle' }; });
         m.sections.forEach(s => {
             if (!s.rows.length) return;
             const row = ws.addRow(['', s.title, s.rows.length]);
-            [2, 3].forEach(c => { row.getCell(c).border = border; });
-            row.getCell(3).alignment = { horizontal: 'center' };
+            row.height = ROW_H;
+            [2, 3].forEach(c => { row.getCell(c).border = border; row.getCell(c).alignment = { vertical: 'middle' }; });
+            row.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
         });
         if (m.dupes) {
             const row = ws.addRow(['', 'Duplicates removed', m.dupes]);
-            [2, 3].forEach(c => { row.getCell(c).border = border; row.getCell(c).font = { italic: true, color: { argb: 'FF7F7F7F' } }; });
-            row.getCell(3).alignment = { horizontal: 'center' };
+            row.height = ROW_H;
+            [2, 3].forEach(c => { row.getCell(c).border = border; row.getCell(c).font = { italic: true, color: { argb: 'FF7F7F7F' } }; row.getCell(c).alignment = { vertical: 'middle' }; });
+            row.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
         }
 
-        // sections
+        // body (white panel)
+        ws.addRow([]);
+        const bodyRow = (vals, h) => {
+            const x = ws.addRow(vals);
+            for (let c = 1; c <= COLS; c++) x.getCell(c).fill = white;
+            x.height = h;
+            return x;
+        };
+        const spacer = (h) => bodyRow([], h);
+        const fullLine = (txt) => {
+            const x = bodyRow(['*', txt], fitH(lines(txt, W[1] + W[2])));
+            ws.mergeCells(x.number, 2, x.number, COLS);
+            x.getCell(1).alignment = { vertical: 'top', horizontal: 'center', wrapText: true };
+            x.getCell(2).alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+            x.getCell(2).font = black;
+        };
+        const greet = bodyRow(['', 'Dear Sir,\n\nPlease find below the summary of work completed.'], 42);
+        ws.mergeCells(greet.number, 2, greet.number, COLS);
+        greet.getCell(2).alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+        greet.getCell(2).font = black;
+
         m.sections.forEach(s => {
             if (!s.rows.length) return;
-            ws.addRow([]);
-            const t = ws.addRow([s.title + '  (' + s.rows.length + ')']);
-            ws.mergeCells(t.number, 1, t.number, COLS);
-            t.font = { size: 12, bold: true, color: { argb: 'FF1F4E79' } }; t.height = 20;
-            t.getCell(1).border = { bottom: { style: 'medium', color: { argb: 'FF1F4E79' } } };
-            (s.intro || []).forEach((line, li) => {
-                if (li) ws.addRow([]);
-                const ir = ws.addRow(['*', line]);
-                ws.mergeCells(ir.number, 2, ir.number, COLS);
-                ir.getCell(1).alignment = { vertical: 'top', horizontal: 'center' };
-                ir.getCell(2).alignment = { vertical: 'top', wrapText: true };
-                ir.getCell(2).font = { italic: true, color: { argb: 'FF1F3864' } };
-                ir.height = Math.max(18, Math.ceil(line.length / 120) * 15);
-            });
-            if (s.intro && s.intro.length) ws.addRow([]);
-            const h = ws.addRow([''].concat(s.head));
-            h.height = 20;
-            for (let c = 1; c <= s.head.length + 1; c++) {
-                const cell = h.getCell(c);
-                cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-                cell.fill = fill('FF2E75B6'); cell.border = border;
-                cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'center' : 'left', wrapText: true };
-            }
+            spacer(LINE_H);
+            (s.intro || []).forEach((line, li) => { if (li) spacer(LINE_H); fullLine(line); });
+            if (s.intro && s.intro.length) spacer(LINE_H);
             s.rows.forEach((row, i) => {
-                const x = ws.addRow(['*'].concat(row.cols));
-                for (let c = 1; c <= s.head.length + 1; c++) {
-                    const cell = x.getCell(c);
-                    cell.border = border;
-                    cell.alignment = { vertical: 'top', horizontal: c === 1 ? 'center' : 'left', wrapText: true };
-                    if (i % 2 === 1) cell.fill = fill('FFF2F6FC');
+                if (s.key === 'pay') {
+                    if (i) spacer(HALF_H);
+                    const v = row.cols[0], n = row.cols[1];
+                    const x = bodyRow(['*', v, n], fitH(Math.max(lines(v, W[1]), lines(n, W[2]))));
+                    x.getCell(1).alignment = { vertical: 'top', horizontal: 'center', wrapText: true };
+                    [2, 3].forEach(c => { x.getCell(c).alignment = { vertical: 'top', horizontal: 'left', wrapText: true }; x.getCell(c).font = black; });
+                } else {
+                    if (i) spacer(LINE_H);
+                    fullLine(row.cols[0]);
                 }
             });
         });
@@ -1014,7 +1084,34 @@ const app = {
         ws.addRow([]);
         const foot = ws.addRow(['Generated ' + new Date().toLocaleString('en-IN')]);
         ws.mergeCells(foot.number, 1, foot.number, COLS);
-        foot.font = { size: 9, italic: true, color: { argb: 'FF7F7F7F' } };
+        foot.font = { size: 9, italic: true, color: { argb: 'FF7F7F7F' } }; foot.height = 12;
+
+        // Second sheet: every duplicate line that was left out, and where
+        // the copy that stayed in the report is.
+        const ds = wb.addWorksheet('Duplicates Removed', {
+            pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+            views: [{ showGridLines: false }]
+        });
+        ds.columns = [{ width: 6 }, { width: 26 }, { width: 70 }, { width: 26 }];
+        let d = ds.addRow(['Duplicates Removed — ' + title]);
+        ds.mergeCells(d.number, 1, d.number, 4);
+        d.font = { size: 14, bold: true, color: { argb: 'FFFFFFFF' } }; d.height = 28;
+        d.getCell(1).fill = fill('FF1F4E79'); d.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        ds.addRow([]);
+        const dh = ds.addRow(['#', 'Removed from', 'Duplicate line', 'Kept in']);
+        dh.height = ROW_H;
+        for (let c = 1; c <= 4; c++) { const cell = dh.getCell(c); cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; cell.fill = fill('FF2E75B6'); cell.border = border; cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'center' : 'left' }; }
+        const dl = m.dupeList || [];
+        if (!dl.length) {
+            const x = ds.addRow(['', 'No duplicates were removed for this date.']);
+            ds.mergeCells(x.number, 2, x.number, 4);
+            x.height = ROW_H; x.getCell(2).font = { italic: true, color: { argb: 'FF7F7F7F' } }; x.getCell(2).alignment = { vertical: 'middle' };
+        }
+        dl.forEach((x, i) => {
+            const row = ds.addRow([i + 1, x.section, x.line, x.keptIn]);
+            row.height = fitH(lines(x.line, 70));
+            for (let c = 1; c <= 4; c++) { const cell = row.getCell(c); cell.border = border; cell.alignment = { vertical: 'top', horizontal: c === 1 ? 'center' : 'left', wrapText: true }; }
+        });
 
         return wb.xlsx.writeBuffer().then(buf => {
             const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
