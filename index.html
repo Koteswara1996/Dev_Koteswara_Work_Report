@@ -1461,11 +1461,20 @@
         html[data-shell="desktop"] .cfg-shell { flex-direction: column; gap: 12px; }
         html[data-shell="desktop"] .cfg-nav {
             flex: 0 0 auto; width: 100%; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 5px;
-            position: sticky; top: 0; z-index: 20;
+            position: sticky; top: -24px; z-index: 40;   /* -24px = content-area top padding, so it sits flush under the header */
+            /* Opaque frosted bar: sections scrolling up or down pass UNDER
+               it instead of showing through / overlapping the jump bar. */
+            background: linear-gradient(var(--glass-header-bg), var(--glass-header-bg)), var(--canvas-solid);
+            backdrop-filter: saturate(180%) blur(32px);
+            -webkit-backdrop-filter: saturate(180%) blur(32px);
+            box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(0,0,0,0.10);
+            overflow: visible;
         }
+        /* Panels never slide behind the bar when jumped to / scrolled. */
+        html[data-shell="desktop"] .cfg-panel { scroll-margin-top: calc(var(--cfg-nav-h, 64px) + 12px); position: relative; z-index: 0; }
         html[data-shell="desktop"] .cfg-nav-item { padding: 7px 11px; font-size: 0.8rem; gap: 6px; }
         html[data-shell="desktop"] .cfg-nav-chevron { display: none; }
-        html[data-shell="desktop"] .cfg-nav-item.active { background: var(--fill); color: var(--label); }
+        html[data-shell="desktop"] .cfg-nav-item.active { background: var(--accent); color: #fff; }
         html[data-shell="desktop"] .cfg-panels {
             width: 100%; background: none; border: 0; box-shadow: none; overflow: visible;
             columns: 3 400px; column-gap: 14px;
