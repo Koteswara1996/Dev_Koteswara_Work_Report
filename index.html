@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#e2e8f2">
-    <meta name="btw-build" content="68">
+    <meta name="btw-build" content="71">
     <link rel="icon" href="./favicon.svg" type="image/svg+xml">
     <meta name="description" content="Track banking follow-ups, payment deadlines and mail chains.">
     <link rel="manifest" href="./manifest.webmanifest">
@@ -1478,6 +1478,26 @@
         html[data-shell="desktop"] .cfg-panel .dash-title { margin-bottom: 8px; font-size: 0.95rem; }
         html[data-shell="desktop"] .cfg-panel.flash { box-shadow: 0 0 0 3px var(--accent), var(--glass-shadow-sm); transition: box-shadow 0.3s; }
         html[data-shell="desktop"] .cfg-back-btn { display: none !important; }
+        /* Done + DAR / Done buttons */
+        .btn-done {
+            height: 30px; min-width: 30px; padding: 0 9px; border-radius: 9px; cursor: pointer; white-space: nowrap;
+            font-size: 0.74rem; font-weight: 800; color: var(--green-ink);
+            background: rgba(52,199,89,0.10); border: 1px solid rgba(52,199,89,0.30);
+        }
+        .btn-done.dar { color: #fff; background: var(--green); border-color: var(--green); }
+        .btn-done:hover { filter: brightness(1.05); }
+        .btn-done:active { transform: scale(0.94); }
+        .dar-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 12px; font-size: 0.84rem; color: var(--label); background: rgba(52,199,89,0.08); border: 1px solid rgba(52,199,89,0.25); cursor: pointer; }
+        .dar-row input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--green); flex: 0 0 auto; }
+        /* Holidays: long-weekend blocks and holiday cards fill the width */
+        #holidayBlocksBanner:not([style*="none"]) { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 8px !important; }
+        html[data-shell="desktop"] #holidayCardList { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }
+        .rt-box { margin-bottom: 16px; padding: 14px; border-radius: 16px; background: rgba(52,199,89,0.07); border: 1px solid rgba(52,199,89,0.28); }
+        .rt-head { font-weight: 800; font-size: 0.95rem; color: var(--label); margin-bottom: 8px; }
+        .rt-lbl { display: block; font-size: 0.74rem; font-weight: 700; color: var(--label-2); margin-bottom: 6px; }
+        .rt-box textarea { width: 100%; min-height: 70px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.78rem; padding: 10px; border-radius: 12px; border: 1px solid var(--glass-border); background: var(--input-bg); color: var(--label); resize: vertical; }
+        .rt-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 10px; }
+        .rt-actions .btn-modal { min-height: 40px; font-size: 0.82rem; }
         .layout-pick { margin-bottom: 18px; }
         .layout-pick-lbl { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--label-2); margin-bottom: 8px; }
         .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 14px; background: var(--fill); border: 1px solid var(--glass-border-subtle); }
@@ -1607,6 +1627,12 @@
         .entry-grid .sub-rule-fields:empty { display: none; }
         .entry-grid .pair .dt-pair { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 6px; }
         .entry-grid textarea { min-height: 70px; }
+        /* Notes: one line by default; drag the corner down to expand. */
+        .entry-grid #taskNotes, .task-form-compact #taskNotes {
+            min-height: 40px !important; height: 40px; resize: vertical; overflow-y: auto; line-height: 1.35;
+            padding-top: 9px; padding-bottom: 9px;
+        }
+        .entry-grid #narrationPreview { min-height: 40px; height: auto; resize: vertical; }
         /* Notes spans the full row until a Generated Narration sits beside it */
         .entry-grid #narrationPreviewGroup[style*="none"] ~ .c-grow { grid-column: span 2; }
         html[data-shell="desktop"] #taskModal .modal-content { max-width: min(1180px, 96vw); padding: 18px 22px; }
@@ -1763,6 +1789,7 @@
                         <option value="All">Any Due Date</option>
                         <option value="Overdue">Overdue</option>
                         <option value="Today">Today</option>
+                        <option value="DueTodayOpen">Due today (not yet overdue)</option>
                         <option value="DueByToday">Due by Today (incl. overdue)</option>
                         <option value="Tomorrow">Tomorrow</option>
                         <option value="Next7Days">Next 7 days</option>
@@ -2027,15 +2054,16 @@
         </div>
 <div class="cfg-section cfg-panel" id="cfgDailyReport" data-cfg-panel="cfgDailyReport">
             <div class="dash-title">Daily Activity Report</div>
-            <p class="cfg-hint">Summarizes today's Task Activity Log (with full task detail) + General Activity Log + any saved style samples above, into a report written by Gemini.</p>
+            <p class="cfg-hint">Built on this device straight from your entries: <b>every</b> entry completed with <b>✓ DAR</b> on the date is listed and counted (payments as "Payee Name: narration", no mail chain), plus entries you moved forward that day, your Fixed Daily Activities and anything in the Activity Log. Entries completed with plain <b>✓</b> are left out.</p>
             <div class="sheet-grid" style="gap:10px;">
                 <input autocomplete="off" type="date" id="dailyReportDate" style="grid-column: 1 / -1;">
-                <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.resyncCompletedForReport()" title="Re-sends every Completed entry for this date to the report log — safe to run any time, in case any completion didn't get logged">Resync completed tasks for this date</button>
                 <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.generateDailyReport()">Generate report</button>
             </div>
+            <div id="dailyReportInfo" class="cfg-hint" style="display:none; margin-top:10px;"></div>
             <div id="dailyReportOutput" style="display:none; margin-top:12px; padding:14px; border-radius:14px; background:var(--input-bg); border:1px solid var(--line); white-space:pre-wrap; font-size:0.86rem; line-height:1.6; color:var(--label);"></div>
             <div class="sheet-grid" id="dailyReportActions" style="display:none; margin-top:10px; gap:10px;">
                 <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.copyDailyReport()">Copy report text</button>
+                <button class="btn-modal secondary" id="darAiBtn" style="grid-column: 1 / -1;" onclick="app.rewriteDailyReportWithAI()" title="Optional — Gemini rewrites it in your saved style; rejected automatically if any entry goes missing">✨ Rewrite in my style (AI)</button>
                 <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.exportDailyReportExcel()">Download as Excel</button>
             </div>
         </div>
@@ -2265,7 +2293,7 @@
                     </div>
                     <div class="form-group c-half c-grow">
                         <label>Notes</label>
-                        <textarea autocomplete="off" id="taskNotes" placeholder="Additional notes or context..."></textarea>
+                        <textarea autocomplete="off" id="taskNotes" rows="1" placeholder="Additional notes or context… (drag the corner to expand)"></textarea>
                     </div>
                     <div class="form-group c-half">
                         <label style="display:flex; align-items:center; justify-content:space-between;">
@@ -2275,6 +2303,10 @@
                         <div id="taskKeyPoints"></div>
                     </div>
                 </div>
+                <label class="dar-row" id="darIncludeRow" style="display:none;">
+                    <input type="checkbox" id="taskDarInclude" checked>
+                    <span><b>Include in Daily Activity Report</b> — untick for "Done" only (completed, but left out of the report)</span>
+                </label>
                 <div class="modal-buttons">
                     <button type="button" class="btn-modal secondary" id="viewOriginalEmailBtn" style="display:none;" onclick="app.openStoredEmail()">Open Mail</button>
                     <button type="submit" class="btn-modal primary">Save Entry</button>
@@ -2458,8 +2490,20 @@
                 <h2>Cloud Connection</h2>
                 <button class="modal-close" onclick="document.getElementById('syncSetupModal').classList.remove('open')">✕</button>
             </div>
+            <div class="rt-box">
+                <div class="rt-head">⚡ Realtime sync <span class="lbl-note">(Google Firebase — recommended)</span></div>
+                <label for="fbConfigInput" class="rt-lbl">Firebase config — paste the whole <code>firebaseConfig = { … }</code> block</label>
+                <textarea id="fbConfigInput" rows="3" autocomplete="off" spellcheck="false" placeholder='const firebaseConfig = { apiKey: "…", authDomain: "…", projectId: "…", appId: "…" };'></textarea>
+                <div class="rt-actions">
+                    <button type="button" class="btn-modal primary" onclick="app.saveRealtimeConfig()">Save &amp; connect</button>
+                    <button type="button" class="btn-modal secondary" onclick="rt.signIn()">Sign in with Google</button>
+                    <button type="button" class="btn-modal secondary" onclick="rt.signOut()">Sign out</button>
+                    <button type="button" class="btn-modal danger" onclick="document.getElementById('fbConfigInput').value=''; rt.disconnect()">Turn off</button>
+                </div>
+                <div class="cfg-hint" id="rtStatus" style="margin-top:8px;"></div>
+            </div>
             <div class="form-group">
-                <label>Apps Script Web App URL</label>
+                <label>Apps Script Web App URL <span class="lbl-note">(Gmail, AI report, Sheet backup)</span></label>
                 <input autocomplete="off" type="url" id="syncUrlInput" placeholder="https://script.google.com/macros/s/…/exec">
             </div>
             <div class="form-group">
@@ -2520,6 +2564,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="./app.js?v=68"></script>
+    <script src="./app.js?v=71"></script>
 </body>
 </html>

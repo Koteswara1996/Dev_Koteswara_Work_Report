@@ -19,7 +19,7 @@
      non-GET         untouched
 */
 
-const CACHE_VERSION = 'btw-v68';
+const CACHE_VERSION = 'btw-v71';
 const SHELL_CACHE = CACHE_VERSION + '-shell';
 const RUNTIME_CACHE = CACHE_VERSION + '-runtime';
 const RUNTIME_LIMIT = 60;
@@ -249,8 +249,20 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
-  // Apps Script sync, Gmail pulls and anything else off this origin go
-  // straight to the network — stale banking data is worse than none.
+  // The Firebase library files are versioned and never change: keep them
+  // cached so the app (and its offline queue) still starts with no signal.
+  if (url.hostname === 'www.gstatic.com' && url.pathname.indexOf('/firebasejs/') === 0) {
+    event.respondWith(caches.open(RUNTIME_CACHE).then(async (c) => {
+      const hit = await c.match(req);
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res && res.ok) c.put(req, res.clone());
+      return res;
+    }));
+    return;
+  }
+  // Apps Script sync, Gmail pulls, Firestore traffic and anything else off
+  // this origin go straight to the network.
   if (url.origin !== self.location.origin) return;
   if (req.headers.get('range')) return;
 
