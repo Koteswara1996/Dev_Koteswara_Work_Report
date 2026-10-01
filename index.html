@@ -1653,12 +1653,16 @@
 
         /* ── ENTRY FORM: 4 per row on desktop, 2 on phones ─────────────── */
         .entry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; align-items: start; }
-        .entry-grid .c-full, .entry-grid .sub-rule-fields:not(:empty) { grid-column: 1 / -1; }
+        .entry-grid .c-full { grid-column: 1 / -1; }
         .entry-grid .c-half { grid-column: span 2; }
         .entry-grid .c-contents { display: contents; }
         .entry-grid .c-contents[style*="none"] { display: none !important; }
-        .entry-grid .sub-rule-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; }
-        .entry-grid .sub-rule-fields:empty { display: none; }
+        /* Sub Category fields (e.g. Vendor Name) flow into the same 4-per-row
+           grid instead of taking a whole row each — no empty columns. */
+        .entry-grid .sub-rule-fields { display: contents; }
+        .lbl-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--label-2); cursor: pointer; }
+        .lbl-toggle input { width: 14px !important; height: 14px !important; margin: 0; padding: 0 !important; accent-color: var(--accent); cursor: pointer; }
+        .lbl-toggle label { margin: 0 !important; font-size: inherit !important; cursor: pointer; }
         .entry-grid .pair .dt-pair { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 6px; }
         .entry-grid textarea { min-height: 70px; }
         /* Notes: one line by default; drag the corner down to expand. */
@@ -2328,7 +2332,13 @@
                     </div>
 
                     <div class="form-group c-half" id="narrationPreviewGroup" style="display:none;">
-                        <label>Generated Narration</label>
+                        <label style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                            <span>Generated Narration</span>
+                            <span class="lbl-toggle" title="Add the Mail Chain / Reference to the end of the Tally narration">
+                                <input type="checkbox" id="narrationIncludeMail" checked onchange="app.updateNarrationPreview()">
+                                <label for="narrationIncludeMail">Include mail chain</label>
+                            </span>
+                        </label>
                         <div class="input-copy is-area">
                             <textarea id="narrationPreview" readonly></textarea>
                             <button type="button" class="in-copy" onclick="app.copyField('narrationPreview', this)" title="Copy narration" aria-label="Copy narration"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
