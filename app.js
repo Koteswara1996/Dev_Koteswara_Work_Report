@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '67';
+const APP_BUILD = '68';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -103,6 +103,16 @@ const app = {
         return String(str === undefined || str === null ? '' : str)
             .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
             .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    },
+
+    // Value for a single-quoted JS string INSIDE a double-quoted inline handler
+    // (onclick="app.x('...')"). escAttr() is not enough there: the browser
+    // decodes &#39; back to ' before the script runs, so a quote still breaks
+    // out of the string. Every character that can end the string or the
+    // attribute is written as a \uXXXX escape instead.
+    jsArg(str) {
+        return String(str === undefined || str === null ? '' : str)
+            .replace(/[\\'"<>&`\n\r\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
     },
 
     newId() {
@@ -692,7 +702,7 @@ const app = {
                     const preview = (s.sampleText || '').replace(/\n/g, ' ').substring(0, 90);
                     return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                         <span style="flex:1; min-width:0; font-size:0.82rem; color:var(--label-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${this.escAttr(s.sampleText || '')}">${this.sanitize(preview)}${(s.sampleText || '').length > 90 ? '…' : ''}</span>
-                        <button type="button" class="btn-icon bad" onclick="app.deleteReportSample('${this.escAttr(s.id)}')" title="Delete sample">${this.SVGS.bin}</button>
+                        <button type="button" class="btn-icon bad" onclick="app.deleteReportSample('${this.jsArg(s.id)}')" title="Delete sample">${this.SVGS.bin}</button>
                     </div>`;
                 }).join('');
             })
@@ -783,10 +793,10 @@ const app = {
                 box.innerHTML = items.map(f => `
                     <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                         <label style="display:flex; align-items:center; gap:8px; flex:1; min-width:0; cursor:pointer;">
-                            <input type="checkbox" ${f.active ? 'checked' : ''} onchange="app.toggleFixedTask('${this.escAttr(f.id)}', this.checked)" style="width:16px; height:16px; accent-color:var(--accent); flex:0 0 auto;">
+                            <input type="checkbox" ${f.active ? 'checked' : ''} onchange="app.toggleFixedTask('${this.jsArg(f.id)}', this.checked)" style="width:16px; height:16px; accent-color:var(--accent); flex:0 0 auto;">
                             <span style="font-size:0.86rem; color:var(--label); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this.sanitize(f.description)}</span>
                         </label>
-                        <button type="button" class="btn-icon bad" onclick="app.deleteFixedTask('${this.escAttr(f.id)}')" title="Delete">${this.SVGS.bin}</button>
+                        <button type="button" class="btn-icon bad" onclick="app.deleteFixedTask('${this.jsArg(f.id)}')" title="Delete">${this.SVGS.bin}</button>
                     </div>
                 `).join('');
             })
@@ -1262,8 +1272,15 @@ const app = {
             } else if (moved && !first) {
                 this.showToast(`Updated from another device: ${moved} ${moved === 1 ? 'entry' : 'entries'}`, 'info');
             }
-            // More to send (first run, or a big batch)? Go again right away.
-            if (first || dirty.length > batch.length || this.hasLocalChanges()) this._syncAgain = true;
+            // More to send? Go again right away — but only for work that a
+            // repeat can actually finish. Entries the sheet rejected stay
+            // dirty on purpose and are retried by the normal 30 s cycle; and a
+            // reply with no serverTime leaves the cursor at 0, which used to
+            // look like "first run again" forever (a request every 0.4 s).
+            const stillDirty = this.dirtyTasks().some(t => !rejected.has(String(t.id)));
+            const listsPending = (this.listsUpdatedAt || 0) > st.listsAck;
+            const calPending = (this.holidaysUpdatedAt || 0) > st.calAck;
+            if (st.cursor && (first || dirty.length > batch.length || stillDirty || listsPending || calPending)) this._syncAgain = true;
         }).catch(err => {
             console.error('Sync error:', err);
             this._syncAgain = false;
@@ -1274,9 +1291,14 @@ const app = {
             this.syncInProgress = false;
             if (mark) mark.classList.remove('busy');
             this._syncRunning = null;
-            if (ok && this._syncAgain) {
-                const again = this._syncAgainManual; this._syncAgain = false; this._syncAgainManual = false;
-                setTimeout(() => this.runSync({ manual: again && false }), 400);
+            if (ok && this._syncAgain && (this._againRuns || 0) < 5) {
+                // At most 5 back-to-back follow-ups; after that the 30 s cycle takes over.
+                this._againRuns = (this._againRuns || 0) + 1;
+                this._syncAgain = false; this._syncAgainManual = false;
+                setTimeout(() => this.runSync({}), 400);
+            } else {
+                this._againRuns = 0;
+                this._syncAgain = false; this._syncAgainManual = false;
             }
         });
         return this._syncRunning;
@@ -1934,15 +1956,15 @@ const app = {
                 <div class="alarm-deadline" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); font-size: 0.78rem; color: var(--red-ink);">
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
                         <span style="font-weight:700;">⏰ Deadline crossed: ${this.formatDateStr(task.deadlineDate)} at ${task.deadlineTime ? this.formatTimeStr(task.deadlineTime) : '11:59 PM'}</span>
-                        <button type="button" class="btn-row" onclick="app.acknowledgeDeadline('${idAttr}')" style="padding:5px 10px; font-size:0.74rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:9px; cursor:pointer;">Acknowledge</button>
+                        <button type="button" class="btn-row" onclick="app.acknowledgeDeadline('${this.jsArg(task.id)}')" style="padding:5px 10px; font-size:0.74rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:9px; cursor:pointer;">Acknowledge</button>
                     </div>
                 </div>` : '';
             const nonWorkingBanner = nonWorking ? `
                 <div class="alarm-nonworking" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.25); font-size: 0.78rem; color: var(--amber-ink);">
                     <div style="font-weight:700; margin-bottom:6px;">This due date falls on a holiday, Sunday, or leave day.</div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                        <button type="button" class="btn-row" onclick="app.resolveNonWorkingDue('${idAttr}', 'today')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:10px; cursor:pointer;">Do it today anyway</button>
-                        <button type="button" class="btn-row go" onclick="app.resolveNonWorkingDue('${idAttr}', 'next')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Move to next working day</button>
+                        <button type="button" class="btn-row" onclick="app.resolveNonWorkingDue('${this.jsArg(task.id)}', 'today')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:10px; cursor:pointer;">Do it today anyway</button>
+                        <button type="button" class="btn-row go" onclick="app.resolveNonWorkingDue('${this.jsArg(task.id)}', 'next')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Move to next working day</button>
                     </div>
                 </div>` : '';
 
@@ -1968,7 +1990,7 @@ const app = {
                         <button type="button" class="btn-row go" data-action="alarm-reschedule" data-id="${idAttr}" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--blue-ink); background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.2); border-radius: 10px; cursor: pointer;">Move</button>
                     </span>
                     <span class="alarm-field" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
-                        <select id="alarmRec_${idAttr}" onchange="app.changeAlarmRecurrence('${idAttr}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--violet-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
+                        <select id="alarmRec_${idAttr}" onchange="app.changeAlarmRecurrence('${this.jsArg(task.id)}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--violet-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
                             <option value="None"${task.recurrence === 'None' || !task.recurrence ? ' selected' : ''}>Doesn't repeat</option>
                             <option value="Daily"${task.recurrence === 'Daily' ? ' selected' : ''}>Daily</option>
                             <option value="Weekly"${task.recurrence === 'Weekly' ? ' selected' : ''}>Weekly</option>
@@ -2642,7 +2664,7 @@ const app = {
         box.innerHTML = days.map(d => `
             <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                 <span style="flex:1; font-size:0.86rem; color:var(--label);">${this.formatDateStr(d, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                <button type="button" class="btn-icon bad" onclick="app.deleteLeaveDay('${this.escAttr(d)}')" title="Remove">${this.SVGS.bin}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteLeaveDay('${this.jsArg(d)}')" title="Remove">${this.SVGS.bin}</button>
             </div>
         `).join('');
     },
@@ -2756,7 +2778,7 @@ const app = {
             const isBuiltIn = builtIn.indexOf(name) !== -1;
             return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                 <span style="flex:1; font-size:0.86rem; color:var(--label);">${this.sanitize(name)}${isBuiltIn ? ' <span style=\"color:var(--label-2); font-weight:400;\">(built-in)</span>' : ''}</span>
-                ${isBuiltIn ? '' : `<button type="button" class="btn-icon bad" onclick="app.deleteCustomCalendar('${this.escAttr(name)}')" title="Delete">${this.SVGS.bin}</button>`}
+                ${isBuiltIn ? '' : `<button type="button" class="btn-icon bad" onclick="app.deleteCustomCalendar('${this.jsArg(name)}')" title="Delete">${this.SVGS.bin}</button>`}
             </div>`;
         }).join('');
     },
@@ -4395,10 +4417,15 @@ const app = {
         return sc.fields.every(f => (vals[f.label] || '').toString().trim() !== '');
     },
 
+    // "In-Progress", "In Progress" and "in_progress" are the same status.
+    normStatus(status) {
+        return String(status || '').trim().toLowerCase().replace(/[-_\s]+/g, ' ');
+    },
+
     updateConditionalFields() {
         const cat = document.getElementById('taskCategory').value;
         const status = document.getElementById('taskStatus').value;
-        const statusNorm = String(status || '').trim().toLowerCase();
+        const statusNorm = this.normStatus(status);
 
         const importBox = document.getElementById('importInProgressFields');
         const subCategoryBox = document.getElementById('subCategoryField');
@@ -4511,8 +4538,8 @@ const app = {
                     <div style="font-weight:700; font-size:0.88rem; color:var(--label);">${this.sanitize(sc.name)}</div>
                     <div style="font-size:0.76rem; color:var(--label-2);">${this.sanitize(summary)}</div>
                 </div>
-                <button type="button" class="btn-icon" onclick="app.editSubCategoryRule('${this.escAttr(sc.id)}')" title="Edit">${this.SVGS.edit}</button>
-                <button type="button" class="btn-icon bad" onclick="app.deleteSubCategoryRule('${this.escAttr(sc.id)}')" title="Delete">${this.SVGS.bin}</button>
+                <button type="button" class="btn-icon" onclick="app.editSubCategoryRule('${this.jsArg(sc.id)}')" title="Edit">${this.SVGS.edit}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteSubCategoryRule('${this.jsArg(sc.id)}')" title="Delete">${this.SVGS.bin}</button>
             </div>`;
         }).join('');
     },
@@ -4669,8 +4696,8 @@ const app = {
                     <div style="font-weight:700; font-size:0.88rem; color:var(--label);">${this.sanitize(nr.name)}</div>
                     <div style="font-size:0.76rem; color:var(--label-2);">Being ${nr.hasPercent ? '[%] ' : ''}${this.sanitize(nr.phrase)}[${this.sanitize(nr.docLabel)}]${extra ? ' · Fields: ' + this.sanitize(extra) : ''}</div>
                 </div>
-                <button type="button" class="btn-icon" onclick="app.editNarrationRule('${this.escAttr(nr.id)}')" title="Edit">${this.SVGS.edit}</button>
-                <button type="button" class="btn-icon bad" onclick="app.deleteNarrationRule('${this.escAttr(nr.id)}')" title="Delete">${this.SVGS.bin}</button>
+                <button type="button" class="btn-icon" onclick="app.editNarrationRule('${this.jsArg(nr.id)}')" title="Edit">${this.SVGS.edit}</button>
+                <button type="button" class="btn-icon bad" onclick="app.deleteNarrationRule('${this.jsArg(nr.id)}')" title="Delete">${this.SVGS.bin}</button>
             </div>`;
         }).join('');
     },
@@ -4889,13 +4916,13 @@ const app = {
     // Returns an error message if a required conditional field is missing
     // for the category+status combo currently selected, or '' if fine.
     validatePaymentDetails(fields) {
-        if (this.isImportPaymentCategory(fields.category) && String(fields.status).trim().toLowerCase() === 'in progress') {
+        if (this.isImportPaymentCategory(fields.category) && this.normStatus(fields.status) === 'in progress') {
             const pd = this.collectPaymentDetails();
             if (!pd.paymentPercent || !pd.paymentType || !pd.paymentAgainst) {
                 return 'Import Payment marked In Progress needs Payment %, Payment Type, and Payment Against.';
             }
         }
-        if (this.categoryHasSubCategory(fields.category) && String(fields.status).trim().toLowerCase() === 'completed') {
+        if (this.categoryHasSubCategory(fields.category) && this.normStatus(fields.status) === 'completed') {
             if (!fields.subCategory) return 'Select a Sub Category before marking this Completed.';
             const sc = (this.lists.subCategories || []).find(x => x.name === fields.subCategory);
             if (sc && sc.fields && sc.fields.length) {
@@ -5824,7 +5851,7 @@ const app = {
 
         const next = holiday.nextWorkingDay;
         hint.innerHTML = '<span>' + this.sanitize(holiday.name) + ' — banks are closed that day.</span>' +
-            (next ? '<button type="button" onclick="app.useNextWorkingDay(\'' + this.escAttr(next) +
+            (next ? '<button type="button" onclick="app.useNextWorkingDay(\'' + this.jsArg(next) +
                 '\')">Move to ' + this.formatDateStr(next, { day: 'numeric', month: 'short' }) + '</button>' : '');
         hint.style.display = 'flex';
     },
@@ -5923,7 +5950,7 @@ const app = {
         hint.classList.add('clash');
         hint.innerHTML = '<span>' + this.sanitize(clash.description) + ' already holds ' +
             this.formatTimeStr(clash.dueTime) + '.</span>' +
-            (free ? '<button type="button" onclick="app.useSlotTime(\'' + this.escAttr(free) + '\')">Use ' +
+            (free ? '<button type="button" onclick="app.useSlotTime(\'' + this.jsArg(free) + '\')">Use ' +
                 this.formatTimeStr(free) + '</button>' : '');
         hint.style.display = 'flex';
     },
@@ -6598,13 +6625,22 @@ const security = {
         this._countdown = setInterval(tick, 500);
     },
 
+    // Keys that are only looks / preferences, so they survive a PIN reset.
+    RESET_KEEP: ['pureEnergyTheme', 'pureEnergyTextSize', 'pureEnergyShell', 'pureEnergyView', 'pureEnergyAlarmSound'],
+
     forgotPin() {
-        if (!confirm('Reset PIN?\n\nFor safety this removes the PIN AND the entries stored on this device for the current profile. ' +
-            'If Cloud Sync is set up they come back from your sheet on the next pull.\n\nAnything not yet synced will be lost. Continue?')) return;
+        if (!confirm('Reset PIN?\n\nFor safety this erases everything stored on this device — your entries, lists, ' +
+            'holidays AND the Cloud Sync link — and removes the PIN. Without the PIN, the cloud copy is not ' +
+            'reachable from this device until you paste your script URL again in Config → Cloud Sync → Connection.\n\n' +
+            'Anything not yet synced will be lost. Continue?')) return;
         try {
-            localStorage.removeItem(CONFIG.STORAGE_KEY);
-            localStorage.removeItem(this.PIN_KEY);
-            localStorage.removeItem(this.FAIL_KEY);
+            const doomed = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.indexOf('pureEnergy') === 0 && this.RESET_KEEP.indexOf(k) === -1) doomed.push(k);
+            }
+            doomed.forEach(k => localStorage.removeItem(k));
+            try { sessionStorage.clear(); } catch (e) {}
             this.write(this.STATE_KEY, { locked: false, ts: Date.now() });
         } catch (e) {}
         if (this.channel) this.channel.postMessage({ type: 'pin-changed' });
@@ -6912,4 +6948,4 @@ const pwa = {
         }
     }
 };
-pwa.init();
+pwa.init();
