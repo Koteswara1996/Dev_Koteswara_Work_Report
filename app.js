@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '68';
+const APP_BUILD = '69';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -413,18 +413,23 @@ const app = {
     explainHtmlReply(html) {
         const t = String(html || '');
         const title = ((/<title[^>]*>([^<]*)<\/title>/i.exec(t) || [])[1] || '').trim();
-        const low = (title + ' ' + t.slice(0, 4000)).toLowerCase();
+        // Judge the visible words only (no markup / scripts), so a stray "500"
+        // or "busy" inside the page's code can't decide the diagnosis.
+        const text = t.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 1500);
+        const low = (title + ' ' + text).toLowerCase();
+        // Most specific first: a sign-in or permission page must never be
+        // mistaken for a temporary "busy" page.
+        if (/accounts\.google\.com|sign in|servicelogin/.test(low) || /accounts\.google\.com|servicelogin/i.test(t))
+            return 'Google asked for a sign-in — in Apps Script set Deploy → Manage deployments → Edit → Who has access: Anyone.';
+        if (/authori[sz]ation required|needs? permission|access denied|\b403\b/.test(low))
+            return 'The script needs your permission again — open Apps Script, press Run on any function and approve.';
+        if (/too many times|quota|rate limit|\b429\b/.test(low))
+            return 'Google is rate-limiting the script for a while — retrying automatically, more slowly.';
         // "Sorry, unable to open the file at this time" is Google's generic
         // BUSY page — it shows up for a minute or two and goes away. It does
         // not mean the URL is wrong (that same URL synced moments earlier).
-        if (/unable to open the file at this time|try again|temporar|busy|503|502|500/.test(low))
+        if (/unable to open the file at this time|try again|temporar|\bbusy\b|\b50[023]\b/.test(low))
             return 'Google Apps Script was busy for a moment (temporary) — retrying automatically.';
-        if (/too many times|quota|rate limit|429/.test(low))
-            return 'Google is rate-limiting the script for a while — retrying automatically, more slowly.';
-        if (/accounts\.google\.com|sign in|servicelogin/.test(low))
-            return 'Google asked for a sign-in — in Apps Script set Deploy → Manage deployments → Edit → Who has access: Anyone.';
-        if (/authori[sz]ation|permission|access denied|403/.test(low))
-            return 'The script needs your permission again — open Apps Script, press Run on any function and approve.';
         return 'Google returned a temporary error page' + (title ? ' ("' + title + '")' : '') + ' — retrying automatically.';
     },
     /* ---------- SYNC HEALTH ----------
@@ -1225,6 +1230,7 @@ const app = {
         if (saver && (manual || batch.length || first)) saver.innerHTML = '<span class="dot" style="background:var(--blue)"></span> syncing…';
         this.syncInProgress = true;
         let ok = false;
+        const gen = this._syncGen = (this._syncGen || 0) + 1;
 
         this._syncRunning = this.cloudRequest(payload).then(data => {
             if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Sync failed');
@@ -1288,9 +1294,14 @@ const app = {
             if (saver) saver.innerHTML = '<span class="dot" style="background:var(--amber)"></span> ' + (navigator.onLine ? 'retrying…' : 'offline — saved here');
             if (manual) this.showToast((err && err.message) || 'Sync failed — your entries are safe on this device.', 'error');
         }).then(() => {
-            this.syncInProgress = false;
-            if (mark) mark.classList.remove('busy');
-            this._syncRunning = null;
+            // Only the newest sync may clear the flag: syncCycle() can free a
+            // stuck one early, and an old request finishing late must not
+            // wipe the flag of the sync that replaced it.
+            if (this._syncGen === gen) {
+                this.syncInProgress = false;
+                if (mark) mark.classList.remove('busy');
+                this._syncRunning = null;
+            }
             if (ok && this._syncAgain && (this._againRuns || 0) < 5) {
                 // At most 5 back-to-back follow-ups; after that the 30 s cycle takes over.
                 this._againRuns = (this._againRuns || 0) + 1;
@@ -1608,11 +1619,14 @@ const app = {
     updateNotifyState() {
         const hint = document.getElementById('notifyHint');
         const btn = document.getElementById('notifyBtn');
-        if (!hint) return;
         const perm = ("Notification" in window) ? Notification.permission : 'unsupported';
+        if (btn) {
+            btn.style.opacity = perm === 'granted' ? '0.6' : '';
+            btn.title = perm === 'granted' ? 'Alerts are on' : (perm === 'denied' ? 'Alerts are blocked in your browser settings' : 'Turn on alerts for missed deadlines');
+        }
+        if (!hint) return;
         if (perm === 'granted') {
             hint.innerHTML = 'Alerts are <b>on</b>. You will get a notification while the app is open or in the background.';
-            if (btn) btn.style.opacity = '0.6';
         } else if (perm === 'denied') {
             hint.innerHTML = 'Alerts are <b>blocked</b>. Enable them in your browser settings.';
         } else {
@@ -2037,11 +2051,16 @@ const app = {
         // is often the only editing the report needs.
         const remarkEl = document.getElementById('alarmRemarks_' + taskId);
         const remark = remarkEl ? remarkEl.value.trim() : '';
-        if (remark) {
+        // Applied only once the action is certain to go ahead — an early
+        // return (blank snooze minutes, no date, "pick another time") must not
+        // leave the remark half-added, or a retry would add it twice.
+        const applyRemark = () => {
+            if (!remark) return;
             task.notes = (task.notes ? task.notes + '\n' : '') + '[' + this.formatDateStr(this.getLocalDateStr(new Date())) + '] ' + remark;
-        }
+        };
 
         if (action === 'done') {
+            applyRemark();
             if (!this.subCategoryComplete(task)) {
                 this.tryCompleteTask(taskId);
                 return;
@@ -2052,6 +2071,7 @@ const app = {
             // ALREADY been crossed is on screen too, so it goes with it —
             // but a later cut-off (e.g. 4:30 PM RTGS) stays armed and will
             // still fire when its time comes.
+            applyRemark();
             const today = this.getLocalDateStr(new Date());
             const crossedNow = this.isDeadlineCrossed(task);
             task.lastAckDate = today;
@@ -2063,11 +2083,13 @@ const app = {
                 ? 'Reminder silenced. The ' + this.formatTimeStr(task.deadlineTime || '23:59') + ' deadline alarm is still armed.'
                 : 'Task silenced for today.', 'info');
         } else if (action === 'skip') {
+            applyRemark();
             this.skipTask(taskId);
         } else if (action === 'snooze') {
             const input = document.getElementById('snoozeMins_' + taskId);
             const mins = parseInt(input ? input.value : '', 10) || 0;
             if (mins <= 0) { this.showToast("Please enter minutes to snooze.", "warning"); return; }
+            applyRemark();
             task.snoozeUntil = Date.now() + (mins * 60000);
             task.updatedAt = this.stamp();
             this.saveData();
@@ -2090,6 +2112,7 @@ const app = {
                     return;
                 }
             }
+            applyRemark();
             task.dueDate = newDate;
             task.dueTime = this.normalizeTime(newTime);
             task.lastAckDate = null;
@@ -3156,10 +3179,7 @@ const app = {
         const binned = this.tasks.filter(t => t.deleted && !t.purged).length;
         document.getElementById('entryCount').textContent = active.length;
         document.getElementById('badgeCompleted').textContent = completed;
-        document.getElementById('badgeCompletedTab').textContent = completed;
         document.getElementById('badgeBin').textContent = binned;
-        document.getElementById('badgeBinTab').textContent = binned;
-        document.getElementById('badgeRegister').textContent = active.filter(t => t.status !== 'Completed').length;
 
         // Live metric badges: overdue count on Dashboard, bank holidays in
         // the next 7 days on Holidays. Hidden when zero so they only speak up
@@ -3740,15 +3760,6 @@ const app = {
         if (tab === 'Config') { this.renderLayoutPick(); this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
 
         this.renderTable();
-    },
-
-    toggleFilters() {
-        const bar = document.getElementById('registerFilters');
-        if (bar) {
-            const on = bar.classList.toggle('open');
-            const toggle = document.getElementById('filterToggle');
-            if (toggle) toggle.classList.toggle('is-on', on);
-        }
     },
 
     isDateInRange(t, mode) {
@@ -6119,7 +6130,13 @@ const app = {
         const jsonHeaders = ['keyPoints', 'paymentDetails', 'subCategoryFields', 'narration'];
         const all = headers.concat(jsonHeaders);
         const rows = [all.join(',')];
-        const cell = (v) => `"${String(v === undefined || v === null ? '' : v).replace(/"/g, '""')}"`;
+        // A value starting with = + - @ would run as a formula when the CSV is
+        // opened in Excel; a leading ' makes it plain text (undone on import).
+        const cell = (v) => {
+            let t = String(v === undefined || v === null ? '' : v);
+            if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+            return `"${t.replace(/"/g, '""')}"`;
+        };
 
         this.tasks.forEach(t => {
             rows.push(headers.map(h => cell(t[h])).concat(jsonHeaders.map(h => cell(t[h] ? JSON.stringify(t[h]) : ''))).join(','));
@@ -6168,6 +6185,7 @@ const app = {
                             if (!val) return;
                             try { val = JSON.parse(val); } catch (err) { if (h !== 'keyPoints') return; }
                         }
+                        if (typeof val === 'string' && /^'[=+\-@\t\r]/.test(val)) val = val.slice(1);
                         task[h] = val;
                     });
                     if (!task.id) task.id = this.newId();
@@ -6198,12 +6216,17 @@ const app = {
                         this.showToast('Import cancelled', 'info');
                         return;
                     }
+                    // Entries that are not in the file must leave the cloud too,
+                    // otherwise the next sync would simply pull them back.
+                    const keep = new Set(importedTasks.map(t => String(t.id)));
+                    this.tasks.map(t => String(t.id)).filter(id => !keep.has(id)).forEach(id => this.tombstone(id));
                     this.tasks = importedTasks;
                     this.userClearedAll = true;
                     this.showToast('CSV backup restored (replaced)', 'success');
                 }
 
                 this.saveData();
+                this.userClearedAll = false;
                 this.renderTable();
             } catch (err) {
                 console.error(err);
@@ -6426,6 +6449,9 @@ const security = {
     /* ---------- lock / unlock ---------- */
     lock(reason, broadcast = true) {
         if (!this.hasPin()) return;
+        // Without WebCrypto (plain http) the PIN can never be verified, so
+        // locking would trap the user behind a keypad that always says wrong.
+        if (!this.cryptoOk()) return;
         try { this._lock(reason, broadcast); }
         catch (e) {
             // Never leave the app half-locked: undo and report.
