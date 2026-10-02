@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#e2e8f2">
-    <meta name="btw-build" content="71">
+    <meta name="btw-build" content="75">
     <link rel="icon" href="./favicon.svg" type="image/svg+xml">
     <meta name="description" content="Track banking follow-ups, payment deadlines and mail chains.">
     <link rel="manifest" href="./manifest.webmanifest">
@@ -1044,6 +1044,19 @@
         }
         .due-hint.ok { color: var(--green-ink); background: rgba(52,199,89,0.10); border-color: rgba(52,199,89,0.24); }
         .due-hint.clash { color: var(--red-ink); background: rgba(255,59,48,0.10); border-color: rgba(255,59,48,0.24); }
+        /* Every inline status message in the app uses this same box as
+           the due-date hints above: soft tinted panel, rounded, small bold
+           text. Hidden while empty. Tones: default info (blue), .ok green,
+           .warn amber, .clash / .bad red. */
+        .msg-box {
+            display: block; margin: 10px 0 0; padding: 10px 12px; border-radius: 12px;
+            font-size: 0.82rem; font-weight: 600; line-height: 1.5;
+            color: var(--blue-ink); background: rgba(0,122,255,0.08); border: 1px solid rgba(0,122,255,0.22);
+        }
+        .msg-box:empty { display: none !important; }
+        .msg-box.ok { color: var(--green-ink); background: rgba(52,199,89,0.10); border-color: rgba(52,199,89,0.24); }
+        .msg-box.warn { color: var(--amber-ink); background: rgba(255,149,0,0.10); border-color: rgba(255,149,0,0.24); }
+        .msg-box.clash, .msg-box.bad { color: var(--red-ink); background: rgba(255,59,48,0.10); border-color: rgba(255,59,48,0.24); }
         .due-hint button {
             padding: 5px 11px; border-radius: 9px; cursor: pointer; font-size: 0.78rem; font-weight: 800;
             color: var(--blue-ink); background: rgba(0,122,255,0.10); border: 1px solid rgba(0,122,255,0.24);
@@ -1464,11 +1477,20 @@
         html[data-shell="desktop"] .cfg-shell { flex-direction: column; gap: 12px; }
         html[data-shell="desktop"] .cfg-nav {
             flex: 0 0 auto; width: 100%; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 5px;
-            position: sticky; top: 0; z-index: 20;
+            position: sticky; top: -24px; z-index: 40;   /* -24px = content-area top padding, so it sits flush under the header */
+            /* Opaque frosted bar: sections scrolling up or down pass UNDER
+               it instead of showing through / overlapping the jump bar. */
+            background: linear-gradient(var(--glass-header-bg), var(--glass-header-bg)), var(--canvas-solid);
+            backdrop-filter: saturate(180%) blur(32px);
+            -webkit-backdrop-filter: saturate(180%) blur(32px);
+            box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(0,0,0,0.10);
+            overflow: visible;
         }
+        /* Panels never slide behind the bar when jumped to / scrolled. */
+        html[data-shell="desktop"] .cfg-panel { scroll-margin-top: calc(var(--cfg-nav-h, 64px) + 12px); position: relative; z-index: 0; }
         html[data-shell="desktop"] .cfg-nav-item { padding: 7px 11px; font-size: 0.8rem; gap: 6px; }
         html[data-shell="desktop"] .cfg-nav-chevron { display: none; }
-        html[data-shell="desktop"] .cfg-nav-item.active { background: var(--fill); color: var(--label); }
+        html[data-shell="desktop"] .cfg-nav-item.active { background: var(--accent); color: #fff; }
         html[data-shell="desktop"] .cfg-panels {
             width: 100%; background: none; border: 0; box-shadow: none; overflow: visible;
             columns: 3 400px; column-gap: 14px;
@@ -1481,6 +1503,38 @@
         html[data-shell="desktop"] .cfg-panel .dash-title { margin-bottom: 8px; font-size: 0.95rem; }
         html[data-shell="desktop"] .cfg-panel.flash { box-shadow: 0 0 0 3px var(--accent), var(--glass-shadow-sm); transition: box-shadow 0.3s; }
         html[data-shell="desktop"] .cfg-back-btn { display: none !important; }
+        /* Done + DAR / Done buttons */
+        .btn-done {
+            height: 30px; min-width: 30px; padding: 0 9px; border-radius: 9px; cursor: pointer; white-space: nowrap;
+            font-size: 0.74rem; font-weight: 800; color: var(--green-ink);
+            background: rgba(52,199,89,0.10); border: 1px solid rgba(52,199,89,0.30);
+        }
+        .btn-done.dar { color: #fff; background: var(--green); border-color: var(--green); }
+        .btn-done:hover { filter: brightness(1.05); }
+        .btn-done:active { transform: scale(0.94); }
+        .dar-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 12px; font-size: 0.84rem; color: var(--label); background: rgba(52,199,89,0.08); border: 1px solid rgba(52,199,89,0.25); cursor: pointer; }
+        .dar-row input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--green); flex: 0 0 auto; }
+        /* Holidays: long-weekend blocks and holiday cards fill the width */
+        #holidayBlocksBanner:not([style*="none"]) { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 8px !important; }
+        html[data-shell="desktop"] #holidayCardList { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }
+        .rt-box { margin-bottom: 16px; padding: 14px; border-radius: 16px; background: rgba(52,199,89,0.07); border: 1px solid rgba(52,199,89,0.28); }
+        .rt-head { font-weight: 800; font-size: 0.95rem; color: var(--label); margin-bottom: 8px; }
+        .rt-lbl { display: block; font-size: 0.74rem; font-weight: 700; color: var(--label-2); margin-bottom: 6px; }
+        .rt-box textarea { width: 100%; min-height: 70px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.78rem; padding: 10px; border-radius: 12px; border: 1px solid var(--glass-border); background: var(--input-bg); color: var(--label); resize: vertical; }
+        .rt-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 10px; }
+        .rt-actions .btn-modal { min-height: 40px; font-size: 0.82rem; }
+        .dar-intro { margin-top: 12px; padding: 10px 12px; border-radius: 14px; background: var(--fill); border: 1px solid var(--glass-border-subtle); }
+        .dar-intro summary { cursor: pointer; font-weight: 700; font-size: 0.85rem; color: var(--label); }
+        .dar-intro textarea { width: 100%; margin-top: 8px; padding: 8px 10px; font-size: 0.84rem; border-radius: 10px; border: 1px solid var(--glass-border); background: var(--input-bg); color: var(--label); resize: vertical; }
+        /* Config fixes: theme buttons never squeeze their icon onto the label;
+           plain text boxes in panels get the normal input styling */
+        .theme-row { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+        .theme-row .theme-btn { height: auto !important; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 58px; padding: 8px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.1; }
+        .cfg-panel input[type="text"]:not(.search-compact), .cfg-panel input:not([type]), .cfg-panel input[type="date"], .cfg-panel input[type="number"] {
+            width: 100%; min-height: 40px; padding: 8px 12px; margin-bottom: 8px; font-size: 0.9rem; color: var(--label);
+            background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; outline: none; box-sizing: border-box;
+        }
+        .cfg-panel input:focus { border-color: var(--accent); }
         .layout-pick { margin-bottom: 18px; }
         .layout-pick-lbl { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--label-2); margin-bottom: 8px; }
         .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 14px; background: var(--fill); border: 1px solid var(--glass-border-subtle); }
@@ -1602,14 +1656,24 @@
 
         /* ── ENTRY FORM: 4 per row on desktop, 2 on phones ─────────────── */
         .entry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; align-items: start; }
-        .entry-grid .c-full, .entry-grid .sub-rule-fields:not(:empty) { grid-column: 1 / -1; }
+        .entry-grid .c-full { grid-column: 1 / -1; }
         .entry-grid .c-half { grid-column: span 2; }
         .entry-grid .c-contents { display: contents; }
         .entry-grid .c-contents[style*="none"] { display: none !important; }
-        .entry-grid .sub-rule-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; }
-        .entry-grid .sub-rule-fields:empty { display: none; }
+        /* Sub Category fields (e.g. Vendor Name) flow into the same 4-per-row
+           grid instead of taking a whole row each — no empty columns. */
+        .entry-grid .sub-rule-fields { display: contents; }
+        .lbl-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--label-2); cursor: pointer; }
+        .lbl-toggle input { width: 14px !important; height: 14px !important; margin: 0; padding: 0 !important; accent-color: var(--accent); cursor: pointer; }
+        .lbl-toggle label { margin: 0 !important; font-size: inherit !important; cursor: pointer; }
         .entry-grid .pair .dt-pair { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 6px; }
         .entry-grid textarea { min-height: 70px; }
+        /* Notes: one line by default; drag the corner down to expand. */
+        .entry-grid #taskNotes, .task-form-compact #taskNotes {
+            min-height: 40px !important; height: 40px; resize: vertical; overflow-y: auto; line-height: 1.35;
+            padding-top: 9px; padding-bottom: 9px;
+        }
+        .entry-grid #narrationPreview { min-height: 40px; height: auto; resize: vertical; }
         /* Notes spans the full row until a Generated Narration sits beside it */
         .entry-grid #narrationPreviewGroup[style*="none"] ~ .c-grow { grid-column: span 2; }
         html[data-shell="desktop"] #taskModal .modal-content { max-width: min(1180px, 96vw); padding: 18px 22px; }
@@ -1766,6 +1830,7 @@
                         <option value="All">Any Due Date</option>
                         <option value="Overdue">Overdue</option>
                         <option value="Today">Today</option>
+                        <option value="DueTodayOpen">Due today (not yet overdue)</option>
                         <option value="DueByToday">Due by Today (incl. overdue)</option>
                         <option value="Tomorrow">Tomorrow</option>
                         <option value="Next7Days">Next 7 days</option>
@@ -1985,7 +2050,7 @@
                     <button type="button" data-shell="desktop" onclick="app.setShellPref('desktop')">🖥 Desktop</button>
                     <button type="button" data-shell="mobile" onclick="app.setShellPref('mobile')">📱 Mobile</button>
                 </div>
-                <div class="cfg-hint" id="layoutPickHint" style="margin-top:6px;"></div>
+                <div class="msg-box" id="layoutPickHint"></div>
             </div>
             <div class="theme-row">
                 <button class="theme-btn" data-theme="pearl" onclick="app.applyTheme('pearl')">⚪ Pearl</button>
@@ -2030,16 +2095,26 @@
         </div>
 <div class="cfg-section cfg-panel" id="cfgDailyReport" data-cfg-panel="cfgDailyReport">
             <div class="dash-title">Daily Activity Report</div>
-            <p class="cfg-hint">Summarizes today's Task Activity Log (with full task detail) + General Activity Log + any saved style samples above, into a report written by Gemini.</p>
+            <p class="cfg-hint">Built on this device straight from your entries: <b>every</b> entry completed with <b>✓ DAR</b> on the date is listed and counted (payments as "Vendor Name: narration", no mail chains), plus entries you moved forward that day, your Fixed Daily Activities and anything in the Activity Log. Entries completed with plain <b>✓</b> are left out.</p>
             <div class="sheet-grid" style="gap:10px;">
                 <input autocomplete="off" type="date" id="dailyReportDate" style="grid-column: 1 / -1;">
-                <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.resyncCompletedForReport()" title="Re-sends every Completed entry for this date to the report log — safe to run any time, in case any completion didn't get logged">Resync completed tasks for this date</button>
                 <button class="btn-modal primary" style="grid-column: 1 / -1;" onclick="app.generateDailyReport()">Generate report</button>
             </div>
+            <div id="dailyReportInfo" class="msg-box" style="display:none;"></div>
+            <details class="dar-intro">
+                <summary>Standard lines before payments (Domestic / Urgent)</summary>
+                <textarea id="darIntro1" rows="2"></textarea>
+                <textarea id="darIntro2" rows="3"></textarea>
+                <div class="rt-actions">
+                    <button type="button" class="btn-modal primary" onclick="app.savePaymentIntro(false)">Save lines</button>
+                    <button type="button" class="btn-modal secondary" onclick="app.savePaymentIntro(true)">Reset to default</button>
+                </div>
+            </details>
             <div id="dailyReportOutput" style="display:none; margin-top:12px; padding:14px; border-radius:14px; background:var(--input-bg); border:1px solid var(--line); white-space:pre-wrap; font-size:0.86rem; line-height:1.6; color:var(--label);"></div>
             <div class="sheet-grid" id="dailyReportActions" style="display:none; margin-top:10px; gap:10px;">
                 <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.copyDailyReport()">Copy report text</button>
-                <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.exportDailyReportExcel()">Download as Excel</button>
+                <button class="btn-modal secondary" id="darAiBtn" style="grid-column: 1 / -1;" onclick="app.rewriteDailyReportWithAI()" title="Optional — Gemini rewrites it in your saved style; rejected automatically if any entry goes missing">✨ Rewrite again with AI</button>
+                <button class="btn-modal secondary" style="grid-column: 1 / -1;" onclick="app.exportDailyReportExcel()">⬇ Download Excel (formatted)</button>
             </div>
         </div>
 <div class="cfg-section cfg-panel" id="cfgTextSize" data-cfg-panel="cfgTextSize">
@@ -2065,7 +2140,7 @@
                 <button class="sheet-item" onclick="app.restoreFromCloud()"><span class="ico">⤓</span>Restore</button>
                 <button class="sheet-item" onclick="app.openSyncSetup()"><span class="ico">🔗</span>Connection</button>
             </div>
-            <p class="cfg-hint" id="syncHealth" style="margin:14px 0 0; line-height:1.7;"></p>
+            <p class="msg-box" id="syncHealth" style="line-height:1.7;"></p>
             <p class="cfg-hint" style="margin:6px 0 0;">All your devices share one set of entries — just paste the same script URL on each. If Google is busy for a moment, sync retries on its own.</p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgDataBackup" data-cfg-panel="cfgDataBackup">
@@ -2091,7 +2166,7 @@
                 <label class="walk-field">Every (min)<input autocomplete="off" type="number" min="10" step="5" id="walkEvery" onchange="app.saveNudgeCfg('walk', { every: Number(this.value) })"></label>
                 <button class="sheet-item" onclick="app.triggerNudge('walk')"><span class="ico">🔔</span>Preview</button>
             </div>
-            <p class="cfg-hint" id="walkNextHint" style="margin: 12px 0 0;"></p>
+            <p class="msg-box" id="walkNextHint"></p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgWaterReminder" data-cfg-panel="cfgWaterReminder">
             <div class="dash-title">Water Reminder</div>
@@ -2103,7 +2178,7 @@
                 <label class="walk-field">Every (min)<input autocomplete="off" type="number" min="10" step="5" id="waterEvery" onchange="app.saveNudgeCfg('water', { every: Number(this.value) })"></label>
                 <button class="sheet-item" onclick="app.triggerNudge('water')"><span class="ico">🔔</span>Preview</button>
             </div>
-            <p class="cfg-hint" id="waterNextHint" style="margin: 12px 0 0;"></p>
+            <p class="msg-box" id="waterNextHint"></p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgTimeSlots" data-cfg-panel="cfgTimeSlots">
             <div class="dash-title">Time Slots</div>
@@ -2112,7 +2187,7 @@
                 <button class="sheet-item walk-toggle" id="slotToggle" onclick="app.toggleSlots()"><span class="ico">⏱️</span><span id="slotToggleLabel">Holding on</span></button>
                 <label class="walk-field">Hold for (min)<input autocomplete="off" type="number" min="1" max="240" step="5" id="slotMinutes" onchange="app.saveSlotCfg({ minutes: Number(this.value) })"></label>
             </div>
-            <p class="cfg-hint" id="slotHint" style="margin: 12px 0 0;"></p>
+            <p class="msg-box" id="slotHint"></p>
         </div>
 <div class="cfg-section cfg-panel" id="cfgToolsSettings" data-cfg-panel="cfgToolsSettings">
             <div class="dash-title">Settings & Tools</div>
@@ -2131,7 +2206,7 @@
                 <button class="sheet-item" onclick="pwa.clearCache()"><span class="ico">🧹</span>Clear Cache</button>
             </div>
             <p class="cfg-hint" id="swVersion" style="margin: 14px 0 0;"></p>
-            <p class="cfg-hint" id="installHint" style="margin: 6px 0 0;"></p>
+            <p class="msg-box" id="installHint"></p>
         </div>
             </div>
         </div>
@@ -2260,7 +2335,13 @@
                     </div>
 
                     <div class="form-group c-half" id="narrationPreviewGroup" style="display:none;">
-                        <label>Generated Narration</label>
+                        <label style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                            <span>Generated Narration</span>
+                            <span class="lbl-toggle" title="Add the Mail Chain / Reference to the end of the Tally narration">
+                                <input type="checkbox" id="narrationIncludeMail" checked onchange="app.updateNarrationPreview()">
+                                <label for="narrationIncludeMail">Include mail chain</label>
+                            </span>
+                        </label>
                         <div class="input-copy is-area">
                             <textarea id="narrationPreview" readonly></textarea>
                             <button type="button" class="in-copy" onclick="app.copyField('narrationPreview', this)" title="Copy narration" aria-label="Copy narration"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
@@ -2268,7 +2349,7 @@
                     </div>
                     <div class="form-group c-half c-grow">
                         <label>Notes</label>
-                        <textarea autocomplete="off" id="taskNotes" placeholder="Additional notes or context..."></textarea>
+                        <textarea autocomplete="off" id="taskNotes" rows="1" placeholder="Additional notes or context… (drag the corner to expand)"></textarea>
                     </div>
                     <div class="form-group c-half">
                         <label style="display:flex; align-items:center; justify-content:space-between;">
@@ -2278,6 +2359,10 @@
                         <div id="taskKeyPoints"></div>
                     </div>
                 </div>
+                <label class="dar-row" id="darIncludeRow" style="display:none;">
+                    <input type="checkbox" id="taskDarInclude" checked>
+                    <span><b>Include in Daily Activity Report</b> — untick for "Done" only (completed, but left out of the report)</span>
+                </label>
                 <div class="modal-buttons">
                     <button type="button" class="btn-modal secondary" id="viewOriginalEmailBtn" style="display:none;" onclick="app.openStoredEmail()">Open Mail</button>
                     <button type="submit" class="btn-modal primary">Save Entry</button>
@@ -2336,7 +2421,7 @@
                 <h2>Tally Narration Types</h2>
                 <button class="modal-close" onclick="app.closeNarrationRules()">✕</button>
             </div>
-            <p class="cfg-hint" style="padding:0 2px;">Each type builds one sentence: "Being " + an optional % + a fixed phrase + the document number you enter at completion + any extra fields below + an optional note + this entry's Mail Chain. Mark one extra field "Lead" to put it first instead — "&lt;value&gt; : ..." — and drop the Mail Chain (e.g. Vendor Name on a COD charge).</p>
+            <p class="cfg-hint" style="padding:0 2px;">Each type builds one sentence: "Being " + an optional % + a fixed phrase + the document number you enter at completion + any extra fields below + an optional note + this entry's Mail Chain. Tick "Lead" on any extra fields (one or several, e.g. Vendor Name and Vendor Code) to put them first in the Daily Activity Report — "&lt;value&gt; - &lt;value&gt;: narration" — they are kept out of the Tally narration.</p>
             <div id="narrationRulesList" style="display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; margin: 10px 0;"></div>
             <div class="form-group">
                 <label>Narration Type Name</label>
@@ -2461,8 +2546,20 @@
                 <h2>Cloud Connection</h2>
                 <button class="modal-close" onclick="document.getElementById('syncSetupModal').classList.remove('open')">✕</button>
             </div>
+            <div class="rt-box">
+                <div class="rt-head">⚡ Realtime sync <span class="lbl-note">(Google Firebase — recommended)</span></div>
+                <label for="fbConfigInput" class="rt-lbl">Firebase config — paste the whole <code>firebaseConfig = { … }</code> block</label>
+                <textarea id="fbConfigInput" rows="3" autocomplete="off" spellcheck="false" placeholder='const firebaseConfig = { apiKey: "…", authDomain: "…", projectId: "…", appId: "…" };'></textarea>
+                <div class="rt-actions">
+                    <button type="button" class="btn-modal primary" onclick="app.saveRealtimeConfig()">Save &amp; connect</button>
+                    <button type="button" class="btn-modal secondary" onclick="rt.signIn()">Sign in with Google</button>
+                    <button type="button" class="btn-modal secondary" onclick="rt.signOut()">Sign out</button>
+                    <button type="button" class="btn-modal danger" onclick="document.getElementById('fbConfigInput').value=''; rt.disconnect()">Turn off</button>
+                </div>
+                <div class="msg-box" id="rtStatus"></div>
+            </div>
             <div class="form-group">
-                <label>Apps Script Web App URL</label>
+                <label>Apps Script Web App URL <span class="lbl-note">(Gmail, AI report, Sheet backup)</span></label>
                 <input autocomplete="off" type="url" id="syncUrlInput" placeholder="https://script.google.com/macros/s/…/exec">
             </div>
             <div class="form-group">
@@ -2523,6 +2620,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="./app.js?v=71"></script>
+    <script src="./app.js?v=75"></script>
 </body>
 </html>

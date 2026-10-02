@@ -13,7 +13,6 @@ const CONFIG = {
     BASE_LEAVE_DAYS_KEY: 'pureEnergyLeaveDays',
     BASE_DEADLINE_ACK_KEY: 'pureEnergyDeadlineAlertAck',
     BASE_TOMBSTONES_KEY: 'pureEnergyTombstones',
-    DEFAULT_TOKEN: 'PureEnergySecure2026',
     get TOMBSTONES_KEY() { return `${this.BASE_TOMBSTONES_KEY}_${app.currentUser}`; },
     get STORAGE_KEY() { return `${this.BASE_STORAGE_KEY}_${app.currentUser}`; },
     get LISTS_KEY() { return `${this.BASE_LISTS_KEY}_${app.currentUser}`; },
@@ -27,7 +26,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '71';
+const APP_BUILD = '75';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -355,15 +354,23 @@ const app = {
     // Security token the Apps Script checks on every call (Script Property
     // AUTH_TOKEN). Set it in Config → Cloud Sync → Connection; falls back to
     // the script's own default so an untouched setup keeps working.
-    authToken() {
-        return (localStorage.getItem(CONFIG.TOKEN_KEY) || '').trim() || CONFIG.DEFAULT_TOKEN;
+    authToken() { return ''; },   // the script no longer uses a token
+
+    // fetch() with a time limit: a dropped connection can no longer leave
+    // "Fetching…" / "Loading…" spinning forever.
+    fetchT(url, opts, ms) {
+        const ctrl = window.AbortController ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), ms || 30000) : null;
+        return fetch(url, Object.assign({}, opts || {}, ctrl ? { signal: ctrl.signal } : {}))
+            .catch(err => { throw (err && err.name === 'AbortError') ? new Error('Google took too long to answer — try again in a moment.') : err; })
+            .finally(() => { if (timer) clearTimeout(timer); });
     },
 
-    // GET helper for the Gmail endpoints — same URL, token attached.
+    // GET helper for the Gmail endpoints.
     cloudGetUrl(params) {
         const SCRIPT_URL = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim();
         if (!SCRIPT_URL) return '';
-        const q = Object.assign({ username: this.currentUser || '', token: this.authToken() }, params || {});
+        const q = Object.assign({}, params || {});
         return SCRIPT_URL + '?' + Object.keys(q).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(q[k])).join('&');
     },
 
@@ -371,8 +378,7 @@ const app = {
         const SCRIPT_URL = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim();
         if (!SCRIPT_URL) return Promise.reject(new Error("Cloud URL is not configured (Setup)"));
         const body = Object.assign({}, payload, {
-            username: payload.username || this.currentUser,
-            token: this.authToken()
+            username: payload.username || this.currentUser
         });
         const ctrl = window.AbortController ? new AbortController() : null;
         const timer = ctrl ? setTimeout(() => ctrl.abort(), this.REQUEST_TIMEOUT_MS) : null;
@@ -474,13 +480,14 @@ const app = {
         const pending = ((this._tomb || { pending: [] }).pending || []).length;
         const live = this.tasks.filter(t => !t.deleted).length;
         const skew = Math.round((this.clockOffset || 0) / 1000);
+        box.classList.toggle('warn', !!h.fails);
         box.innerHTML =
             '<b>On this device:</b> ' + live + ' entries (' + this.tasks.filter(t => t.deleted).length + ' in Bin)' +
             '<br><b>Last successful sync:</b> ' + fmt(h.lastOk) +
             (pending ? ' · <b>' + pending + '</b> deletion(s) waiting to upload' : '') +
             (Math.abs(skew) >= 30 ? '<br><b>Clock:</b> this device is ' + Math.abs(skew) + ' s ' + (skew > 0 ? 'behind' : 'ahead of') + ' the sheet (corrected automatically)' : '') +
             (h.fails ? '<br><span style="color:var(--amber-ink);"><b>Retrying automatically</b> — ' + h.fails + ' attempt(s) missed since ' + fmt(h.failingSince) + '. Nothing is lost; entries are kept on this device until the sheet answers.</span>' : '') +
-            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (Number(this.serverVersion) < 67 ? ' (older — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
+            (this.serverVersion ? '<br><b>Apps Script build:</b> ' + this.sanitize(this.serverVersion) + (Number(this.serverVersion) < 70 ? ' (older — paste the latest Code.gs and deploy a New version)' : ' ✓') : '') +
             (h.lastError ? '<br><span style="color:var(--label-2);"><b>Last message from Google</b> (' + fmt(h.lastFail) + '): ' + this.sanitize(h.lastError) + '</span>' : '');
     },
 
@@ -514,6 +521,324 @@ const app = {
         return /not\s*(yet\s*)?start/i.test(String(status || '').trim());
     },
 
+    // A small per-entry diary of real status moves (date + new status), so
+    // the report knows what you worked on each day without depending on
+    // any network request having got through.
+    noteWork(task, status) {
+        if (!task) return;
+        const d = this.getLocalDateStr(new Date());
+        const log = Array.isArray(task.workLog) ? task.workLog.slice(-19) : [];
+        log.push({ d: d, s: String(status || '') });
+        task.workLog = log;
+    },
+
+    workedOn(task, date) {
+        return Array.isArray(task.workLog) && task.workLog.some(w => w && w.d === date);
+    },
+
+    isPaymentEntry(t) {
+        if (t.narration && (t.narration.typeName || t.narration.text)) return true;
+        return /domestic\s*payments?|urgent\s*payments?/i.test(t.category || '');
+    },
+
+    DAR_PAYMENT_INTRO: [
+        'Modified the respective party ledgers in Tally by passing the necessary payment entries to accurately record the payment initiation.',
+        'Prepared payment files after verifying beneficiary details (name, account number, IFSC), transaction dates, and payment purposes. Verified party Statements of Account (SOA) prior to payment to avoid reconciliation discrepancies and ensure accurate vendor tracking.'
+    ],
+
+    paymentIntroLines() {
+        const l = this.lists && Array.isArray(this.lists.darPaymentIntro) ? this.lists.darPaymentIntro : null;
+        return (l || this.DAR_PAYMENT_INTRO).map(x => String(x || '').trim()).filter(Boolean);
+    },
+
+    renderPaymentIntroEditor() {
+        const a = document.getElementById('darIntro1'), b = document.getElementById('darIntro2');
+        if (!a || !b) return;
+        const l = this.paymentIntroLines();
+        a.value = l[0] || ''; b.value = l[1] || '';
+    },
+
+    savePaymentIntro(reset) {
+        const a = document.getElementById('darIntro1'), b = document.getElementById('darIntro2');
+        this.lists.darPaymentIntro = reset ? this.DAR_PAYMENT_INTRO.slice() : [a.value, b.value].map(x => String(x || '').trim());
+        this.listsUpdatedAt = this.stamp();
+        localStorage.setItem(CONFIG.LISTS_TS_KEY, String(this.listsUpdatedAt));
+        if (this.saveLists) this.saveLists(); else this.saveData();
+        this.renderPaymentIntroEditor();
+        this.showToast(reset ? 'Payment lines reset to default.' : 'Payment lines saved — used in every report.', 'success');
+    },
+
+    /* ================= DAILY ACTIVITY REPORT ENGINE =================
+       Built on THIS device, straight from your entries — not from a
+       network log that could drop items. Every entry completed on the date
+       with "Done + DAR" is listed, one line each, numbered and counted, so
+       nothing can go missing. Payments use "Payee Name: narration" (no mail
+       chain). */
+    collectReportData(date) {
+        const live = this.tasks.filter(t => t && !t.deleted && !t.purged);
+        const completed = live.filter(t => t.status === 'Completed' && t.completedDate === date);
+        const inReport = completed.filter(t => t.darInclude !== false);
+        const excluded = completed.length - inReport.length;
+        const payments = inReport.filter(t => this.isPaymentEntry(t));
+        const others = inReport.filter(t => !this.isPaymentEntry(t));
+        const followed = live.filter(t => t.status !== 'Completed' && this.workedOn(t, date) && t.darInclude !== false);
+        const byTime = (a, b) => String(a.dueTime || '99').localeCompare(String(b.dueTime || '99')) || String(a.description || '').localeCompare(String(b.description || ''));
+        return { payments: payments.sort(byTime), others: others.sort(byTime), followed: followed.sort(byTime), excluded: excluded };
+    },
+
+    // Takes the mail chain (as typed, or with the vendor already cut out of
+    // it, as the Tally narration stores it) out of a line.
+    withoutMail(text, t) {
+        let s = String(text || '');
+        const mail = String((t && t.mailChain) || '').trim();
+        if (!mail) return s;
+        const variants = [mail, this.stripPayeeFromMail(mail, this.payeeFromMail(mail)), this.stripPayeeFromMail(mail, this.taskPayee(t))]
+            .filter(v => v && v.length > 3).sort((a, b) => b.length - a.length);
+        variants.forEach(v => { s = s.split(v).join(' '); });
+        return s.replace(/\s+/g, ' ').trim();
+    },
+
+    reportLine(t) {
+        const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        if (this.isPaymentEntry(t)) {
+            // "Vendor Name: <narration without mail chain>"
+            const n = t.narration || {};
+            const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
+            let body = '';
+            if (nr) {
+                body = this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, '', n.fieldsValues, this.narrationSubText(t));
+            } else if (n.reportText) {
+                body = n.reportText;
+            } else if (n.text) {
+                body = this.withoutMail(n.text, t);
+            } else {
+                body = t.description;
+            }
+            const fromNarration = !!(nr || n.reportText || n.text);
+            body = clean(this.withoutMail(body, t));
+            const payee = this.taskPayee(t);
+            if (payee) {
+                // already "Vendor: …" → take the prefix off, it's added back below
+                if (body.toLowerCase().indexOf(payee.toLowerCase() + ':') === 0) body = clean(body.slice(payee.length + 1));
+                // the vendor leads the line — drop it (and a "Vendor Name:" label) from inside the narration
+                if (fromNarration) body = clean(body.replace(new RegExp('\\s*(?:(?:vendor|payee|party)\\s*(?:name)?\\s*:+)?\\s*' + payee.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[,;]?', 'i'), ' '));
+            }
+            return payee ? payee + ': ' + body : body;
+        }
+        // every other task: the description, redesigned with whatever was
+        // written in Notes (what was actually done / the outcome), so the
+        // report line says the real work, not just the task title.
+        return this.reportTaskWithNotes(t);
+    },
+
+    // Turns the Notes into clean report sentences: drops the "[1 Oct 2026]"
+    // stamps that Past Due remarks add, duplicate lines, and lines that just
+    // repeat the task title. Then reads "Title: what was done."
+    notesForReport(t) {
+        const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        const key = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const title = key(t.description);
+        const seen = new Set();
+        const out = [];
+        String(t.notes || '').split(/\r?\n+/).forEach(raw => {
+            let l = clean(raw)
+                .replace(/^\[[^\]]{3,40}\]\s*/, '')          // [date] stamp
+                .replace(/^(?:[-*•>]+|\d+[.)])\s*/, '')        // bullets / numbering
+                .replace(/^(?:notes?|remarks?)\s*[:\-–]\s*/i, '');
+            if (t.mailChain && String(t.mailChain).trim()) l = clean(l.split(String(t.mailChain).trim()).join(''));
+            const k = key(l);
+            if (!k || k === title || seen.has(k)) return;
+            seen.add(k);
+            l = l.charAt(0).toUpperCase() + l.slice(1);
+            if (!/[.!?]$/.test(l)) l += '.';
+            out.push(l);
+        });
+        return out;
+    },
+
+    reportTaskWithNotes(t) {
+        const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        const desc = clean(t.description).replace(/[.:;,\s]+$/, '');
+        const notes = this.notesForReport(t);
+        if (!notes.length) return desc;
+        if (!desc) return notes.join(' ');
+        // Notes that already restate the task in full replace the title.
+        const joined = notes.join(' ');
+        if (joined.toLowerCase().indexOf(desc.toLowerCase()) === 0) return joined;
+        return desc + ': ' + joined;
+    },
+
+    // One model drives both the on-screen text and the Excel file, so they
+    // always match. Duplicate lines (ignoring case, spacing, punctuation)
+    // are removed across all sections and counted.
+    buildReportModel(date, inputs) {
+        inputs = inputs || {};
+        const d = this.collectReportData(date);
+        const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        const key = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        // seen: line key -> section it was kept in; every removed duplicate
+        // is listed (for the "Duplicates Removed" sheet in the Excel file).
+        const seen = new Map();
+        const dupeList = [];
+        const keep = (line, sec) => {
+            const k = key(line); if (!k) return false;
+            if (seen.has(k)) { dupeList.push({ line: clean(line), section: sec, keptIn: seen.get(k) }); return false; }
+            seen.set(k, sec); return true;
+        };
+
+        const payRows = [];
+        d.payments.forEach(t => {
+            const line = this.reportLine(t);
+            // Every payment is its own transaction — four payments to the
+            // same vendor are four lines, even when the narration reads the
+            // same. Payments are never dropped as duplicates; the line is
+            // only remembered so the same text elsewhere isn't repeated.
+            const k = key(line);
+            if (!k) return;
+            if (!seen.has(k)) seen.set(k, 'Payments');
+            const vendor = this.taskPayee(t);
+            const body = vendor && line.indexOf(vendor + ': ') === 0 ? line.slice(vendor.length + 2) : line;
+            payRows.push({ line: line, cols: [vendor || '—', body, t.category || ''], t: t });
+        });
+        const descRows = (list, sec) => {
+            const out = [];
+            list.forEach(t => { const line = this.reportLine(t); if (keep(line, sec)) out.push({ line: line, cols: [line, t.category || ''], t: t }); });
+            return out;
+        };
+        const otherRows = descRows(d.others, 'Other work completed');
+        const followRows = descRows(d.followed, 'Followed up / in progress');
+        const fixRows = [];
+        (inputs.fixed || []).filter(Boolean).forEach(f => { if (keep(f, 'Routine daily activities')) fixRows.push({ line: clean(f), cols: [clean(f)] }); });
+        const genRows = [];
+        (inputs.general || []).filter(g => g && g.activity).forEach(g => {
+            const line = clean(g.activity) + (g.details ? ' — ' + clean(g.details) : '');
+            if (keep(line, 'Other activities')) genRows.push({ line: line, cols: [line] });
+        });
+
+        return {
+            date: date, dupes: dupeList.length, dupeList: dupeList, data: d,
+            sections: [
+                // Other work completed first, then Domestic / Urgent payments.
+                { key: 'oth', title: 'Other work completed', head: ['Work done', 'Category'], widths: [30, 80], rows: otherRows },
+                { key: 'pay', title: 'Payments', intro: payRows.length ? this.paymentIntroLines() : [], head: ['Vendor Name', 'Narration', 'Category'], widths: [30, 80, 20], rows: payRows },
+                { key: 'fol', title: 'Followed up / in progress', head: ['Work done', 'Category'], widths: [30, 80], rows: followRows },
+                { key: 'fix', title: 'Routine daily activities', head: ['Activity'], widths: [30], rows: fixRows },
+                { key: 'gen', title: 'Other activities', head: ['Activity'], widths: [30], rows: genRows }
+            ]
+        };
+    },
+
+    // Plain text: headings, "* " bullets (no serial numbers), other work
+    // completed first, then payments with the two standard lines, no mail
+    // chains anywhere.
+    buildDailyReportText(date, inputs) {
+        const m = this.buildReportModel(date, inputs);
+        const title = this.formatDateStr(date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        const out = ['Daily Activity Report — ' + title];
+        let any = false;
+        m.sections.forEach(s => {
+            if (!s.rows.length) return;
+            any = true;
+            out.push('');
+            out.push(s.title + (s.key === 'pay' ? ' (' + s.rows.length + ')' : ''));
+            if (s.intro && s.intro.length) {
+                s.intro.forEach((l, i) => { if (i) out.push(''); out.push('* ' + l); });
+                out.push('');
+            }
+            // One blank line between every task; payment lines stay tight
+            // here (plain text has no half line) — the on-screen view,
+            // the copied report and the Excel file give them a half line.
+            s.rows.forEach((r, i) => { if (i && s.key !== 'pay') out.push(''); out.push('* ' + r.line); });
+        });
+        if (!any) { out.push(''); out.push('No completed or updated entries for this date.'); }
+        const cnt = (k) => (m.sections.find(s => s.key === k) || { rows: [] }).rows.length;
+        const data = Object.assign({}, m.data, {
+            payments: m.data.payments.slice(0, cnt('pay')), others: m.data.others.slice(0, cnt('oth')),
+            followed: m.data.followed.slice(0, cnt('fol')), dupes: m.dupes,
+            bullets: m.sections.reduce((a, s) => a + s.rows.length + (s.intro ? s.intro.length : 0), 0)
+        });
+        this._lastModel = m;
+        return { text: out.join('\n'), data: data };
+    },
+
+    generateDailyReport() {
+        const dateEl = document.getElementById('dailyReportDate');
+        const date = dateEl.value || this.getLocalDateStr(new Date());
+        const out = document.getElementById('dailyReportOutput');
+        const actions = document.getElementById('dailyReportActions');
+        const info = document.getElementById('dailyReportInfo');
+
+        const show = (inputs, note) => {
+            const r = this.buildDailyReportText(date, inputs);
+            out.style.display = 'block';
+            this.renderReportOutput(out, r.text);
+            actions.style.display = 'grid';
+            this._lastReport = { date: date, text: r.text, data: r.data };
+            if (info) {
+                info.style.display = 'block';
+                info.innerHTML = '<b>' + r.data.payments.length + '</b> payments · <b>' + r.data.others.length + '</b> other completed · <b>' + r.data.followed.length + '</b> followed up' +
+                    (r.data.excluded ? ' · ' + r.data.excluded + ' marked "Done" (not in report)' : '') + (r.data.dupes ? ' · ' + r.data.dupes + ' duplicate' + (r.data.dupes === 1 ? '' : 's') + ' removed' : '') + (note ? '<br>' + note : '');
+            }
+            return r;
+        };
+
+        // 1) instant, complete report from this device
+        show({}, 'Adding routine & other activities from the sheet…');
+        // 2) add the standing daily activities + manually logged activities
+        const url = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim();
+        if (!url) { show({}, ''); return; }
+        this.cloudRequest({ action: 'reportInputs', date: date })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'no inputs');
+                this._reportInputs = { fixed: data.fixed || [], general: data.general || [] };
+                show(this._reportInputs, 'Writing it in your style with AI…');
+                this.rewriteDailyReportWithAI(true);
+            })
+            .catch(() => { this._reportInputs = {}; show({}, 'Routine / other activities could not be loaded right now — showing the complete standard report.'); });
+    },
+
+    // Optional: Gemini rewrites the SAME report in your own style. The result
+    // is checked — if a single entry went missing, it's rejected and the
+    // complete report stays.
+    rewriteDailyReportWithAI(auto) {
+        const rep = this._lastReport;
+        const out = document.getElementById('dailyReportOutput');
+        const info = document.getElementById('dailyReportInfo');
+        if (!rep) { this.showToast('Generate the report first.', 'warning'); return; }
+        const btn = document.getElementById('darAiBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Writing with AI…'; }
+        const m = this._lastModel;
+        const pay = m ? (m.sections.find(s => s.key === 'pay') || { rows: [] }).rows : [];
+        // Payment lines must come back exactly; others may be reworded.
+        const mustPay = pay.map(r => r.line);
+        const mails = this.tasks.map(t => String(t.mailChain || '').trim()).filter(x => x.length > 6);
+        const note = (txt) => { if (info) info.innerHTML = info.innerHTML.replace(/<br>.*$/, '') + '<br>' + txt; };
+        this.cloudRequest({ action: 'generateDailyReport', date: rep.date, draft: rep.text, itemCount: rep.data.bullets || 0, style: 'v2' })
+            .then(data => {
+                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'AI rewrite failed');
+                let text = String(data.report || '').replace(/^\s*\d+[.)]\s+/gm, '* ').replace(/^\s*[-•]\s+/gm, '* ').trim();
+                const norm = (s) => s.toLowerCase().replace(/\s+/g, ' ');
+                const nt = norm(text);
+                const missing = mustPay.filter(l => nt.indexOf(norm(l)) === -1);
+                const bullets = (text.match(/^\* /gm) || []).length;
+                const leaked = mails.filter(x => nt.indexOf(norm(x)) !== -1);
+                if (missing.length || bullets < (rep.data.bullets || 0) || leaked.length) {
+                    note('AI version was not used (it ' + (missing.length ? 'changed ' + missing.length + ' payment line(s)' : bullets < rep.data.bullets ? 'dropped items' : 'added a mail chain') + ') — showing the complete standard report.');
+                    if (!auto) this.showToast('AI version rejected — kept the complete report.', 'warning');
+                    return;
+                }
+                this.renderReportOutput(out, text);
+                rep.aiText = text;
+                note('✨ AI-written — every payment line and item checked present.');
+                this.showToast('Report ready (AI-written).', 'success');
+            })
+            .catch(err => {
+                note('AI not available right now (' + this.sanitize((err && err.message) || 'error') + ') — showing the complete standard report.');
+                if (!auto) this.showToast(err.message || 'AI rewrite failed — the complete report is still shown.', 'error');
+            })
+            .finally(() => { if (btn) { btn.disabled = false; btn.textContent = '✨ Rewrite again with AI'; } });
+    },
+
     // What actually goes into a report line for this task: the Tally
     // Narration if one was generated (it's already the clearest, most
     // complete description of what was done) — but WITHOUT the Mail Chain
@@ -522,16 +847,10 @@ const app = {
     // remark typed in the Past Due Alert), otherwise the fallback given.
     reportDetailsFor(task, fallback) {
         if (task && task.narration) {
-            if (task.narration.reportText) return task.narration.reportText;
-            if (task.narration.text) {
-                // Older entries saved before reportText existed: strip the
-                // Mail Chain back out of the already-built text.
-                let t = task.narration.text;
-                if (task.mailChain && t.indexOf(task.mailChain) !== -1) {
-                    t = t.split(task.mailChain).join('').trim();
-                }
-                return t;
-            }
+            const rebuilt = this.narrationFor(task, 'report');
+            if (rebuilt) return rebuilt;
+            if (task.narration.text) return task.narration.text;          // already includes the mail chain
+            if (task.narration.reportText) return task.narration.reportText + (task.mailChain ? ' ' + task.mailChain : '');
         }
         if (task && task.notes) return task.notes;
         return fallback || '';
@@ -545,6 +864,11 @@ const app = {
        every edit/reschedule/reopen/bin touch, and never a status change
        that just lands back on "Not yet started". ---------- */
     logTaskActivity(task, action, details, dateOverride) {
+        // The Daily Activity Report is now built on this device from the
+        // entries themselves, so this extra call per completion is no longer
+        // needed — it only competed with sync for the script's lock.
+        return Promise.resolve();
+        // eslint-disable-next-line no-unreachable
         if (!task || !this.currentUser) return;
         if (action !== 'completed' && action !== 'status-changed') return;
         if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim() === "") return Promise.resolve();
@@ -615,65 +939,227 @@ const app = {
             .then(() => this.showToast('Resynced ' + matches.length + ' completed ' + (matches.length === 1 ? 'entry' : 'entries') + ' for ' + date + ' — generate the report now.', 'success'));
     },
 
-    generateDailyReport() {
-        const dateEl = document.getElementById('dailyReportDate');
-        const date = dateEl.value || this.getLocalDateStr(new Date());
-        const out = document.getElementById('dailyReportOutput');
-        const actions = document.getElementById('dailyReportActions');
+    // Report text -> HTML with the house spacing: a full line between
+    // tasks, a half line between Domestic / Urgent payment lines.
+    reportTextToHtml(text) {
+        const esc = (x) => this.sanitize(x);
+        const titles = ['other work completed', 'payments', 'followed up', 'routine daily activities', 'other activities'];
+        let inPay = false, prevBullet = false, blank = false;
+        const html = [];
+        String(text || '').split('\n').forEach((raw, i) => {
+            const l = raw.trim();
+            if (!l) { blank = true; return; }      // spacing comes from the margins below
+            const wasBlank = blank; blank = false;
+            if (l.indexOf('* ') === 0) {
+                // payment lines that follow each other directly: half a line
+                const gap = !prevBullet ? 0 : (inPay && !wasBlank) ? 0.5 : 1;
+                html.push('<div style="margin-top:' + gap + 'em;padding-left:1.1em;text-indent:-1.1em;">•&nbsp; ' + esc(l.slice(2)) + '</div>');
+                prevBullet = true;
+                return;
+            }
+            const low = l.toLowerCase();
+            if (titles.some(x => low.indexOf(x) === 0)) inPay = low.indexOf('payments') === 0;
+            html.push('<div style="margin-top:' + (i ? 1 : 0) + 'em;font-weight:' + (i ? 700 : 800) + ';">' + esc(l) + '</div>');
+            prevBullet = false;
+        });
+        return html.join('');
+    },
 
-        out.style.display = 'block';
-        out.textContent = 'Generating…';
-        actions.style.display = 'none';
-
-        this.cloudRequest({ action: 'generateDailyReport', date: date })
-            .then(data => {
-                if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Failed to generate report');
-                out.textContent = data.report;
-                actions.style.display = 'grid';
-                this.showToast('Report generated.', 'success');
-            })
-            .catch(err => {
-                out.textContent = '';
-                out.style.display = 'none';
-                this.showToast(err.message || 'Failed to generate report', 'error');
-            });
+    renderReportOutput(out, text) {
+        out._reportText = text;
+        out.style.whiteSpace = 'normal';
+        out.innerHTML = this.reportTextToHtml(text);
     },
 
     copyDailyReport() {
         const out = document.getElementById('dailyReportOutput');
-        const text = out ? out.textContent : '';
+        const text = out ? (out._reportText || out.textContent) : '';
         if (!text) return;
-        navigator.clipboard.writeText(text)
+        // Rich copy keeps the full-line / half-line spacing when pasted into
+        // Outlook or Gmail; plain text is the fallback.
+        const html = '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;">' + this.reportTextToHtml(text) + '</div>';
+        let p;
+        try {
+            p = navigator.clipboard.write([new ClipboardItem({
+                'text/html': new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([text], { type: 'text/plain' })
+            })]);
+        } catch (e) { p = Promise.reject(e); }
+        p.catch(() => navigator.clipboard.writeText(text))
             .then(() => this.showToast('Report copied.', 'success'))
             .catch(() => this.showToast('Could not copy — select the text manually.', 'warning'));
     },
 
+    // Formatted Excel: title, summary, then one styled table per section
+    // (bold coloured headers, borders, wrapped text, set column widths,
+    // zebra rows, numbered), ready to print on A4 landscape.
     exportDailyReportExcel() {
-        const out = document.getElementById('dailyReportOutput');
-        const text = out ? out.textContent : '';
-        if (!text) { this.showToast('Generate a report first.', 'warning'); return; }
-        if (typeof XLSX === 'undefined') { this.showToast('Excel export library did not load — check your connection and try again.', 'error'); return; }
+        const m = this._lastModel;
+        if (!m) { this.showToast('Generate a report first.', 'warning'); return; }
+        const go = () => this.writeReportXlsx(m).catch(err => this.showToast('Excel export failed: ' + (err && err.message || err), 'error'));
+        if (window.ExcelJS) return go();
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+        s.onload = go;
+        s.onerror = () => this.showToast('Could not load the Excel library — check your connection and try again.', 'error');
+        document.head.appendChild(s);
+        this.showToast('Preparing Excel…', 'info');
+    },
 
-        const date = document.getElementById('dailyReportDate').value || this.getLocalDateStr(new Date());
-        const generatedAt = new Date().toLocaleString();
+    writeReportXlsx(m) {
+        // If the on-screen report is AI-written, use its wording for the
+        // non-payment sections (payment lines are identical either way).
+        const ai = this._lastReport && this._lastReport.aiText;
+        if (ai) {
+            const titles = m.sections.map(s => s.title.toLowerCase());
+            const got = {}; let cur = null;
+            ai.split('\n').forEach(l => {
+                const t = l.trim(); if (!t) return;
+                if (t.indexOf('* ') === 0) { if (cur) (got[cur] = got[cur] || []).push(t.slice(2).trim()); return; }
+                const i = titles.findIndex(x => t.toLowerCase().indexOf(x) === 0);
+                cur = i >= 0 ? m.sections[i].key : null;
+            });
+            m = Object.assign({}, m, { sections: m.sections.map(s => {
+                const lines = got[s.key];
+                if (s.key === 'pay' || !lines || lines.length !== s.rows.length) return s;
+                return Object.assign({}, s, { rows: s.rows.map((r, i) => Object.assign({}, r, { cols: [lines[i]].concat(r.cols.slice(1)) })) });
+            }) });
+        }
+        const wb = new ExcelJS.Workbook();
+        wb.creator = 'Banking Work Tracker';
+        // Layout follows the house template (Daily_Activity_Report_*.xlsx):
+        // A "*" | B 30 | C 47.36; title bar, summary, "Dear Sir" greeting,
+        // then the lines with no section headings. Text rows are 23 high
+        // (taller only when the text wraps), a blank line between tasks and
+        // a half line between Domestic / Urgent payment lines.
+        const ws = wb.addWorksheet('Daily Report', {
+            pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } },
+            views: [{ showGridLines: false }]
+        });
+        const COLS = 3;
+        const W = [4, 30, 47.36328125];
+        ws.columns = W.map(w => ({ width: w }));
+        const ROW_H = 23, LINE_H = 14.5, HALF_H = 7.25;
 
-        const rows = [
-            ['Daily Activity Report'],
-            ['Date', date],
-            ['Generated', generatedAt],
-            ['Profile', this.currentUser || ''],
-            [],
-            ['Report']
-        ];
-        text.split('\n').forEach(line => rows.push([line]));
+        const thin = { style: 'thin', color: { argb: 'FFB8C2D6' } };
+        const border = { top: thin, left: thin, bottom: thin, right: thin };
+        const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb: argb } });
+        const white = fill('FFFFFFFF');
+        const black = { size: 11, color: { argb: 'FF000000' } };
+        const title = this.formatDateStr(m.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        // Rough wrapped-line count for a cell of the given column width.
+        const lines = (txt, width) => String(txt || '').split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / Math.max(1, width * 1.15))), 0);
+        const fitH = (n) => Math.max(ROW_H, n * LINE_H + 1);
 
-        const sheet = XLSX.utils.aoa_to_sheet(rows);
-        sheet['!cols'] = [{ wch: 100 }];
+        let r = ws.addRow(['Daily Activity Report']);
+        ws.mergeCells(r.number, 1, r.number, COLS);
+        r.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } }; r.height = 28;
+        r.getCell(1).fill = fill('FF1F4E79'); r.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        r = ws.addRow([title]);
+        ws.mergeCells(r.number, 1, r.number, COLS);
+        r.font = { size: 11, italic: true, color: { argb: 'FF1F4E79' } }; r.height = ROW_H;
+        r.getCell(1).alignment = { vertical: 'middle' };
 
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, sheet, 'Daily Report');
-        XLSX.writeFile(workbook, `Daily_Activity_Report_${date}.xlsx`);
-        this.showToast('Excel file downloaded.', 'success');
+        // summary
+        ws.addRow([]);
+        const sumHead = ws.addRow(['', 'Summary', 'Count']);
+        sumHead.height = ROW_H;
+        [2, 3].forEach(c => { const cell = sumHead.getCell(c); cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; cell.fill = fill('FF2E75B6'); cell.border = border; cell.alignment = { vertical: 'middle' }; });
+        m.sections.forEach(s => {
+            if (!s.rows.length) return;
+            const row = ws.addRow(['', s.title, s.rows.length]);
+            row.height = ROW_H;
+            [2, 3].forEach(c => { row.getCell(c).border = border; row.getCell(c).alignment = { vertical: 'middle' }; });
+            row.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+        if (m.dupes) {
+            const row = ws.addRow(['', 'Duplicates removed', m.dupes]);
+            row.height = ROW_H;
+            [2, 3].forEach(c => { row.getCell(c).border = border; row.getCell(c).font = { italic: true, color: { argb: 'FF7F7F7F' } }; row.getCell(c).alignment = { vertical: 'middle' }; });
+            row.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+
+        // body (white panel)
+        ws.addRow([]);
+        const bodyRow = (vals, h) => {
+            const x = ws.addRow(vals);
+            for (let c = 1; c <= COLS; c++) x.getCell(c).fill = white;
+            x.height = h;
+            return x;
+        };
+        const spacer = (h) => bodyRow([], h);
+        const fullLine = (txt) => {
+            const x = bodyRow(['*', txt], fitH(lines(txt, W[1] + W[2])));
+            ws.mergeCells(x.number, 2, x.number, COLS);
+            x.getCell(1).alignment = { vertical: 'top', horizontal: 'center', wrapText: true };
+            x.getCell(2).alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+            x.getCell(2).font = black;
+        };
+        const greet = bodyRow(['', 'Dear Sir,\n\nPlease find below the summary of work completed.'], 42);
+        ws.mergeCells(greet.number, 2, greet.number, COLS);
+        greet.getCell(2).alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+        greet.getCell(2).font = black;
+
+        m.sections.forEach(s => {
+            if (!s.rows.length) return;
+            spacer(LINE_H);
+            (s.intro || []).forEach((line, li) => { if (li) spacer(LINE_H); fullLine(line); });
+            if (s.intro && s.intro.length) spacer(LINE_H);
+            s.rows.forEach((row, i) => {
+                if (s.key === 'pay') {
+                    if (i) spacer(HALF_H);
+                    const v = row.cols[0], n = row.cols[1];
+                    const x = bodyRow(['*', v, n], fitH(Math.max(lines(v, W[1]), lines(n, W[2]))));
+                    x.getCell(1).alignment = { vertical: 'top', horizontal: 'center', wrapText: true };
+                    [2, 3].forEach(c => { x.getCell(c).alignment = { vertical: 'top', horizontal: 'left', wrapText: true }; x.getCell(c).font = black; });
+                } else {
+                    if (i) spacer(LINE_H);
+                    fullLine(row.cols[0]);
+                }
+            });
+        });
+
+        ws.addRow([]);
+        const foot = ws.addRow(['Generated ' + new Date().toLocaleString('en-IN')]);
+        ws.mergeCells(foot.number, 1, foot.number, COLS);
+        foot.font = { size: 9, italic: true, color: { argb: 'FF7F7F7F' } }; foot.height = 12;
+
+        // Second sheet: every duplicate line that was left out, and where
+        // the copy that stayed in the report is.
+        const ds = wb.addWorksheet('Duplicates Removed', {
+            pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+            views: [{ showGridLines: false }]
+        });
+        ds.columns = [{ width: 6 }, { width: 26 }, { width: 70 }, { width: 26 }];
+        let d = ds.addRow(['Duplicates Removed — ' + title]);
+        ds.mergeCells(d.number, 1, d.number, 4);
+        d.font = { size: 14, bold: true, color: { argb: 'FFFFFFFF' } }; d.height = 28;
+        d.getCell(1).fill = fill('FF1F4E79'); d.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        ds.addRow([]);
+        const dh = ds.addRow(['#', 'Removed from', 'Duplicate line', 'Kept in']);
+        dh.height = ROW_H;
+        for (let c = 1; c <= 4; c++) { const cell = dh.getCell(c); cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; cell.fill = fill('FF2E75B6'); cell.border = border; cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'center' : 'left' }; }
+        const dl = m.dupeList || [];
+        if (!dl.length) {
+            const x = ds.addRow(['', 'No duplicates were removed for this date.']);
+            ds.mergeCells(x.number, 2, x.number, 4);
+            x.height = ROW_H; x.getCell(2).font = { italic: true, color: { argb: 'FF7F7F7F' } }; x.getCell(2).alignment = { vertical: 'middle' };
+        }
+        dl.forEach((x, i) => {
+            const row = ds.addRow([i + 1, x.section, x.line, x.keptIn]);
+            row.height = fitH(lines(x.line, 70));
+            for (let c = 1; c <= 4; c++) { const cell = row.getCell(c); cell.border = border; cell.alignment = { vertical: 'top', horizontal: c === 1 ? 'center' : 'left', wrapText: true }; }
+        });
+
+        return wb.xlsx.writeBuffer().then(buf => {
+            const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'Daily_Activity_Report_' + m.date + '.xlsx';
+            document.body.appendChild(a); a.click();
+            setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+            this.showToast('Excel report downloaded.', 'success');
+        });
     },
 
     /* ---------- REPORT STYLE SAMPLES ---------- */
@@ -740,6 +1226,38 @@ const app = {
         const first = document.querySelector('.cfg-nav-item')?.dataset.cfgPanel;
         this.setCfgActivePanel(last || first, false);
         shell.classList.remove('showing-panel'); // always start at the list on mobile
+        this.bindCfgScrollSpy();
+    },
+
+    // Desktop: the jump bar stays pinned on top while scrolling, sections
+    // pass cleanly under it, and the highlighted item follows the section
+    // you're reading as you scroll up or down.
+    bindCfgScrollSpy() {
+        const box = document.getElementById('configTab');
+        const nav = document.getElementById('cfgNav');
+        if (!box || !nav) return;
+        const measure = () => box.style.setProperty('--cfg-nav-h', nav.offsetHeight + 'px');
+        measure();
+        if (this._cfgSpyBound) return;
+        this._cfgSpyBound = true;
+        let ticking = false;
+        const spy = () => {
+            ticking = false;
+            if (document.documentElement.getAttribute('data-shell') !== 'desktop') return;
+            if (Date.now() < (this._cfgJumpUntil || 0)) return;
+            const line = nav.getBoundingClientRect().bottom + 16;
+            let best = null, bestTop = -Infinity;
+            document.querySelectorAll('#cfgPanels .cfg-panel').forEach(el => {
+                const r = el.getBoundingClientRect();
+                if (r.height && r.top <= line && r.top > bestTop) { bestTop = r.top; best = el; }
+            });
+            if (!best) best = document.querySelector('#cfgPanels .cfg-panel');
+            if (!best) return;
+            const slug = best.dataset.cfgPanel;
+            nav.querySelectorAll('.cfg-nav-item').forEach(el => el.classList.toggle('active', el.dataset.cfgPanel === slug));
+        };
+        box.addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(spy); } }, { passive: true });
+        window.addEventListener('resize', measure, { passive: true });
     },
 
     setCfgActivePanel(slug, persist = true) {
@@ -757,6 +1275,9 @@ const app = {
         if (document.documentElement.getAttribute('data-shell') === 'desktop') {
             const el = document.querySelector('.cfg-panel[data-cfg-panel="' + slug + '"]');
             if (el) {
+                this._cfgJumpUntil = Date.now() + 900;
+                const nav = document.getElementById('cfgNav'), box = document.getElementById('configTab');
+                if (nav && box) box.style.setProperty('--cfg-nav-h', nav.offsetHeight + 'px');
                 el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 el.classList.add('flash');
                 setTimeout(() => el.classList.remove('flash'), 1200);
@@ -876,7 +1397,8 @@ const app = {
         this.switchTab('Dashboard');
         this.setupEventListeners();
 
-        if (this.tasks.length === 0) this.pullTasksFromCloud(false);
+        if (typeof rt !== 'undefined') rt.init();
+        if (this.tasks.length === 0 && !(typeof rt !== 'undefined' && rt.active)) this.pullTasksFromCloud(false);
 
         this.engineInterval = setInterval(() => { this.processEngine(); }, 5000);
         setInterval(() => { this.updateHeader(); this.updateStats(); this.renderNudgeSettings(); this.checkHolidayAlerts(new Date()); }, 60000);
@@ -943,7 +1465,10 @@ const app = {
         const pill = document.getElementById('saveStatus');
         if (pill) {
             pill.style.cursor = 'pointer';
-            pill.addEventListener('click', () => { this.switchTab('Config'); this.showCfgPanel('cfgCloudSync'); this.renderSyncHealth(); });
+            pill.addEventListener('click', () => {
+                if (typeof rt !== 'undefined' && rt.active && rt.state === 'signin') { rt.signIn(); return; }
+                this.switchTab('Config'); this.showCfgPanel('cfgCloudSync'); this.renderSyncHealth();
+            });
         }
     },
 
@@ -955,7 +1480,8 @@ const app = {
 
         switch (action) {
             case 'edit': this.openTaskModal(id); break;
-            case 'done': this.tryCompleteTask(id); break;
+            case 'done': this.tryCompleteTask(id, true); break;
+            case 'done-nodar': this.tryCompleteTask(id, false); break;
             case 'reopen': this.reopenTask(id); break;
             case 'bin': this.softDelete(id); break;
             case 'restore': this.restoreTask(id); break;
@@ -969,7 +1495,7 @@ const app = {
             }
             case 'copy-narration': {
                 const t = this.findTask(id);
-                if (t) this.copyToClipboard((t.narration && t.narration.text) || '', el);
+                if (t) this.copyToClipboard(this.narrationFor(t, 'tally'), el);
                 break;
             }
             case 'open-mail': {
@@ -1030,6 +1556,8 @@ const app = {
         const t = this._tomb || this.loadTombstones();
         t.ids[key] = Date.now();
         if (t.pending.indexOf(key) === -1) t.pending.push(key);
+        if (!Array.isArray(t.rtPending)) t.rtPending = [];
+        if (t.rtPending.indexOf(key) === -1) t.rtPending.push(key);
         this.tasks = this.tasks.filter(x => String(x.id) !== key);
         this.saveTombstones();
     },
@@ -1308,12 +1836,21 @@ const app = {
 
     // "Pull changes" and "Sync now" — both are the same single call now.
     pullTasksFromCloud(manual = false) {
+        if (typeof rt !== 'undefined' && rt.active && rt.ready) {
+            // The live listener already has everything; re-attach it to be sure.
+            rt.stopListening(); rt.listen(); rt.schedulePush(10);
+            if (manual) this.showToast('Realtime sync is live — changes arrive automatically.', 'success');
+        }
         return this.runSync({ manual: manual });
     },
 
     // Called after every local change: waits 1.5 s so a burst of edits
     // goes up as one small call.
     syncToGoogleSheets(manual = false) {
+        if (typeof rt !== 'undefined' && rt.active) {
+            rt.schedulePush();                 // realtime: goes up within a second
+            if (!manual) return Promise.resolve();
+        }
         if (manual) return this.runSync({ manual: true });
         clearTimeout(this._pushTimer);
         this._pushTimer = setTimeout(() => {
@@ -1331,6 +1868,11 @@ const app = {
         if (!this.currentUser) return;
         if ((localStorage.getItem(CONFIG.SYNC_URL_KEY) || '').trim() === '') return;
         if (!manual && document.hidden) return;
+        // Realtime on: the Sheet is only a backup copy — refresh it every 5 min.
+        if (!manual && typeof rt !== 'undefined' && rt.active) {
+            if (Date.now() - (this._lastSheetBackup || 0) < 5 * 60000) return;
+            this._lastSheetBackup = Date.now();
+        }
         // After failures, wait a little longer each time: 15 s … 5 min.
         if (!manual && Date.now() < (this.syncBackoffUntil || 0)) return;
         // Only ONE window per device talks to the sheet.
@@ -1381,6 +1923,11 @@ const app = {
         document.getElementById('gmailIndexInput').value = localStorage.getItem(CONFIG.GMAIL_INDEX_KEY) || '0';
         const res = document.getElementById('connTestResult');
         if (res) { res.style.display = 'none'; res.innerHTML = ''; }
+        const fb = document.getElementById('fbConfigInput');
+        if (fb) fb.value = localStorage.getItem(rt.CFG_KEY) || '';
+        if (fb) fb.placeholder = 'Built in: project working-dashboard-655ca — nothing to paste. Only paste here to use a different project.';
+        const st = document.getElementById('rtStatus');
+        if (st) st.innerHTML = rt.statusHtml();
         document.getElementById('syncSetupModal').classList.add('open');
     },
 
@@ -1398,7 +1945,7 @@ const app = {
         const ctrl = window.AbortController ? new AbortController() : null;
         const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
         fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'ping', token: this.authToken(), username: this.currentUser }), signal: ctrl ? ctrl.signal : undefined })
+            body: JSON.stringify({ action: 'ping' }), signal: ctrl ? ctrl.signal : undefined })
             .then(r => r.text())
             .then(text => {
                 let data = null;
@@ -1410,7 +1957,7 @@ const app = {
                 }
                 if (data.status === 'success') {
                     show(true, '<b>Connected ✓</b><br>Your sheet has <b>' + (data.taskCount || 0) + '</b> entries (tab ' + this.sanitize(data.sheet || '') + ').' +
-                        (data.scriptVersion && Number(data.scriptVersion) < 67 ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' — deploy the latest Code.gs as a New version.' : '') +
+                        (data.scriptVersion && Number(data.scriptVersion) < 70 ? '<br>Script build ' + this.sanitize(String(data.scriptVersion)) + ' — deploy the latest Code.gs as a New version.' : '') +
                         '<br>Tap <b>Save Settings</b> to use this.');
                     return;
                 }
@@ -1422,6 +1969,19 @@ const app = {
                     : '<b>Could not reach script.google.com.</b> Check your internet, or a browser shield/extension blocking it.');
             })
             .finally(() => { if (timer) clearTimeout(timer); if (btn) { btn.disabled = false; btn.textContent = 'Test connection'; } });
+    },
+
+    saveRealtimeConfig() {
+        const el = document.getElementById('fbConfigInput');
+        const text = (el && el.value || '').trim();
+        localStorage.removeItem(rt.OFF_KEY);
+        if (!text) { localStorage.removeItem(rt.CFG_KEY); rt.init().then(() => { if (rt.auth && !rt.auth.currentUser) rt.signIn(); }); return; }
+        const cfg = rt.parseConfig(text);
+        if (!cfg) { this.showToast('That doesn\'t look like a Firebase config — it needs apiKey and projectId.', 'error'); return; }
+        const changed = localStorage.getItem(rt.CFG_KEY) !== text;
+        localStorage.setItem(rt.CFG_KEY, text);
+        if (changed && window.firebase && firebase.apps && firebase.apps.length) { this.showToast('Saved — reloading to apply.', 'info'); setTimeout(() => location.reload(), 600); return; }
+        rt.init().then(() => { if (rt.auth && !rt.auth.currentUser) rt.signIn(); });
     },
 
     saveSyncUrlModal() {
@@ -1455,7 +2015,7 @@ const app = {
         document.getElementById('emailListContainer').innerHTML =
             '<div class="empty-state"><strong>Loading...</strong><span>Fetching your unread mail.</span></div>';
 
-        fetch(this.cloudGetUrl({ action: 'fetchEmails' }), { method: 'GET' })
+        this.fetchT(this.cloudGetUrl({ action: 'fetchEmails' }), { method: 'GET' })
             .then(res => res.json())
             .then(data => {
                 btn.innerText = "Fetch Unread Mail";
@@ -1517,7 +2077,7 @@ const app = {
 
         const SCRIPT_URL = (localStorage.getItem(CONFIG.SYNC_URL_KEY) || "").trim();
         if (SCRIPT_URL) {
-            fetch(this.cloudGetUrl({ action: 'markEmailRead', id: id }), { method: 'GET' })
+            this.fetchT(this.cloudGetUrl({ action: 'markEmailRead', id: id }), { method: 'GET' })
                 .catch(err => console.error("Failed to mark read:", err));
         }
     },
@@ -1541,7 +2101,7 @@ const app = {
         }
 
         notes.value = header + "Loading the mail…";
-        fetch(this.cloudGetUrl({ action: 'emailBody', id: email.id }), { method: 'GET' })
+        this.fetchT(this.cloudGetUrl({ action: 'emailBody', id: email.id }), { method: 'GET' })
             .then(res => res.json())
             .then(data => {
                 const text = (data && data.status === 'success') ? (data.body || '') : '';
@@ -2010,6 +2570,11 @@ const app = {
                         <input type="time" id="reschedTime_${idAttr}" value="${this.escAttr(task.dueTime)}" style="font-size: 0.84rem; color: var(--label); background: transparent; border: none; outline: none; padding: 4px;">
                         <button type="button" class="btn-row go" data-action="alarm-reschedule" data-id="${idAttr}" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 600; color: var(--blue-ink); background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.2); border-radius: 10px; cursor: pointer;">Move</button>
                     </span>
+                    <span class="alarm-field" title="Change this entry's status" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
+                        <select id="alarmStatus_${idAttr}" onchange="app.changeAlarmStatus('${this.jsArg(task.id)}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--blue-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
+                            ${(this.lists.statuses || []).concat(this.lists.statuses.indexOf(task.status) === -1 && task.status ? [task.status] : []).map(st => `<option value="${this.escAttr(st)}"${st === task.status ? ' selected' : ''}>${this.sanitize(st)}</option>`).join('')}
+                        </select>
+                    </span>
                     <span class="alarm-field" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
                         <select id="alarmRec_${idAttr}" onchange="app.changeAlarmRecurrence('${this.jsArg(task.id)}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--violet-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
                             <option value="None"${task.recurrence === 'None' || !task.recurrence ? ' selected' : ''}>Doesn't repeat</option>
@@ -2035,6 +2600,33 @@ const app = {
         this.saveData();
         this.renderTable();
         this.showToast('Recurrence set to ' + (task.recurrence === 'None' ? "doesn't repeat" : task.recurrence), 'success');
+    },
+
+    // Status straight from the overdue-alert card. "Completed" goes through
+    // the normal Mark done path (sub-category checks, report, recurrence);
+    // any other status is saved like the Edit form does, and the remark
+    // typed on the card is kept in Notes.
+    changeAlarmStatus(taskId, val) {
+        const task = this.findTask(taskId);
+        if (!task || !val || val === task.status) return;
+        if (val === 'Completed') { this.alarmAction('done', taskId); return; }
+        const remarkEl = document.getElementById('alarmRemarks_' + taskId);
+        const remark = remarkEl ? remarkEl.value.trim() : '';
+        if (remark) {
+            task.notes = (task.notes ? task.notes + '\n' : '') + '[' + this.formatDateStr(this.getLocalDateStr(new Date())) + '] ' + remark;
+            remarkEl.value = '';
+        }
+        const old = task.status;
+        task.status = val;
+        task.completedDate = null;
+        if (!this.isUnstartedStatus(val)) {
+            this.noteWork(task, val);
+            this.logTaskActivity(task, 'status-changed', this.reportDetailsFor(task, 'Status changed from "' + (old || '—') + '" to "' + val + '"'));
+        }
+        task.updatedAt = this.stamp();
+        this.saveData();
+        this.renderTable();
+        this.showToast('Status set to ' + val + '.', 'success');
     },
 
     acknowledgeDeadline(taskId) {
@@ -3152,6 +3744,7 @@ const app = {
     },
 
     saveData() {
+        if (typeof rt !== 'undefined' && rt.active && !rt._fromRemote) rt.schedulePush();
         try {
             // Fold in anything another window saved since we last looked,
             // before writing our list back.
@@ -3776,7 +4369,7 @@ const app = {
         document.getElementById('screenTitle').textContent = titles[tab] || tab;
 
         document.body.classList.toggle('fab-on', ['Register', 'Dashboard', 'Completed', 'Holidays'].indexOf(tab) !== -1);
-        if (tab === 'Config') { this.renderLayoutPick(); this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
+        if (tab === 'Config') { this.renderPaymentIntroEditor(); this.renderLayoutPick(); this.renderSyncHealth(); this.loadReportSamples(); this.loadFixedTasks(); this.renderLeaveDaysList(); this.enterCfgTab(); if (typeof security !== 'undefined') security.renderPanel(); }
 
         this.renderTable();
     },
@@ -3793,6 +4386,13 @@ const app = {
         const diffDays = Math.round((target - today) / (1000 * 60 * 60 * 24));
 
         if (mode === 'Today') return diffDays === 0;
+        // Due today and NOT yet past its time. Together with 'Overdue' this
+        // splits 'DueByToday' exactly: DueTodayOpen + Overdue = DueByToday.
+        if (mode === 'DueTodayOpen') {
+            if (diffDays !== 0) return false;
+            const dt = this.getTaskDueDateTime(t);
+            return !!dt && dt >= new Date();
+        }
         if (mode === 'DueByToday') return diffDays <= 0; // overdue + due today, as of today's 11:59 PM cutoff
         if (mode === 'Tomorrow') return diffDays === 1;
         if (mode === 'Next7Days') return diffDays >= 1 && diffDays <= 7;
@@ -4130,7 +4730,7 @@ const app = {
                     <td class="action-cell">
                         ${viewMailBtn}
                         <button type="button" class="btn-icon" data-action="edit" data-id="${idAttr}" title="Edit Task">${this.SVGS.edit}</button>
-                        <button type="button" class="btn-icon ok" data-action="done" data-id="${idAttr}" title="Mark Done">${this.SVGS.done}</button>
+                        <button type="button" class="btn-done dar" data-action="done" data-id="${idAttr}" title="Done + include in Daily Activity Report">✓ DAR</button><button type="button" class="btn-done" data-action="done-nodar" data-id="${idAttr}" title="Done — leave out of the Daily Activity Report">✓</button>
                     </td>`;
             } else if (mode === 'completed') {
                 const narrationBtn = (t.narration && t.narration.text)
@@ -4227,7 +4827,7 @@ const app = {
                         <div class="tcard-actions">
                             ${mailBtn}
                             <button type="button" class="btn-icon" data-action="edit" data-id="${idAttr}" title="Edit Task">${this.SVGS.edit}</button>
-                            <button type="button" class="btn-icon ok" data-action="done" data-id="${idAttr}" title="Mark Done">${this.SVGS.done}</button>
+                            <button type="button" class="btn-done dar" data-action="done" data-id="${idAttr}" title="Done + include in Daily Activity Report">✓ DAR</button><button type="button" class="btn-done" data-action="done-nodar" data-id="${idAttr}" title="Done — leave out of the Daily Activity Report">✓</button>
                         </div>
                     </div>
                     </div>`;
@@ -4305,7 +4905,10 @@ const app = {
         el.value = v;
     },
 
+    resetDarBox() { const b = document.getElementById('taskDarInclude'); if (b) b.checked = this._pendingDar !== false; this._pendingDar = true; },
+
     openTaskModal(id = null, emailIdForNew = null) {
+        this.resetDarBox();
         const modal = document.getElementById('taskModal');
         const form = document.getElementById('taskForm');
         if (!modal || !form) return;
@@ -4332,11 +4935,14 @@ const app = {
             this.setSelectValue('taskPendingWith', t.pendingWith || '');
             document.getElementById('taskDueDate').value = t.dueDate || '';
             document.getElementById('taskDueTime').value = this.normalizeTime(t.dueTime);
+            const notesEl = document.getElementById('taskNotes'); if (notesEl) notesEl.style.height = '';
             document.getElementById('taskDeadlineDate').value = t.deadlineDate || '';
             document.getElementById('taskDeadlineTime').value = this.normalizeTime(t.deadlineTime);
             document.getElementById('taskMailChain').value = t.mailChain || '';
             document.getElementById('taskRecurrence').value = t.recurrence || 'None';
             document.getElementById('taskNotes').value = t.notes || '';
+            const darBox = document.getElementById('taskDarInclude');
+            if (darBox) darBox.checked = t.darInclude !== false;
             this.renderKeyPoints(t.keyPoints);
             if (delBtn) delBtn.style.display = t.deleted ? 'none' : '';
         } else {
@@ -4453,6 +5059,7 @@ const app = {
     },
 
     updateConditionalFields() {
+        requestAnimationFrame(() => this.fitNarrationSpan && this.fitNarrationSpan());
         const cat = document.getElementById('taskCategory').value;
         const status = document.getElementById('taskStatus').value;
         const statusNorm = this.normStatus(status);
@@ -4477,6 +5084,8 @@ const app = {
         if (importBox) importBox.style.display = showImport ? '' : 'none';
         if (subCategoryBox) subCategoryBox.style.display = showSubCategory ? '' : 'none';
         if (narrationBox) narrationBox.style.display = showNarration ? '' : 'none';
+        const darRow = document.getElementById('darIncludeRow');
+        if (darRow) darRow.style.display = statusNorm === 'completed' ? '' : 'none';
 
         // A hidden condition's old values must not silently ride along on
         // save just because the category/status changed after they were
@@ -4702,8 +5311,8 @@ const app = {
         row.innerHTML = `
             <input type="text" class="kp-key nr-field-label" placeholder="Field label (e.g. Vendor Name)" value="${this.escAttr(label)}">
             <input type="text" class="kp-value nr-field-options" placeholder="Options, comma separated (blank = plain text)" value="${this.escAttr((options || []).join(', '))}">
-            <label style="display:flex; align-items:center; gap:4px; font-size:0.68rem; color:var(--label-2); white-space:nowrap; cursor:pointer; flex:0 0 auto;" title="Lead field: shown first as '&lt;value&gt; : ...' instead of 'Being ...', and the Mail Chain is left out">
-                <input type="radio" name="nrLeadField" class="nr-field-lead" style="width:auto;" ${isLead ? 'checked' : ''}> Lead
+            <label style="display:flex; align-items:center; gap:4px; font-size:0.68rem; color:var(--label-2); white-space:nowrap; cursor:pointer; flex:0 0 auto;" title="Lead field: leads the report line ('&lt;value&gt;: narration') and is kept out of the Tally narration. Tick as many fields as you need.">
+                <input type="checkbox" class="nr-field-lead" style="width:auto;" ${isLead ? 'checked' : ''}> Lead
             </label>
             <button type="button" class="btn-icon bad" onclick="this.closest('.nr-field-row').remove()" title="Remove">${this.SVGS.bin}</button>
         `;
@@ -4719,7 +5328,8 @@ const app = {
             return;
         }
         box.innerHTML = items.map(nr => {
-            const extra = (nr.fields || []).map(f => f.label + (f.label === nr.leadFieldLabel ? ' (lead)' : '')).join(', ');
+            const leads = this.leadLabels(nr);
+            const extra = (nr.fields || []).map(f => f.label + (leads.indexOf(f.label) !== -1 ? ' (lead)' : '')).join(', ');
             return `
             <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--input-bg); border:1px solid var(--line);">
                 <div style="flex:1; min-width:0;">
@@ -4741,7 +5351,8 @@ const app = {
         document.getElementById('nrPhrase').value = nr.phrase;
         document.getElementById('nrDocLabel').value = nr.docLabel;
         document.getElementById('nrFieldRows').innerHTML = '';
-        (nr.fields || []).forEach(f => this.addNrFieldRow(f.label, f.options || [], f.label === nr.leadFieldLabel));
+        const leads = this.leadLabels(nr);
+        (nr.fields || []).forEach(f => this.addNrFieldRow(f.label, f.options || [], leads.indexOf(f.label) !== -1));
     },
 
     collectNrFields() {
@@ -4762,19 +5373,21 @@ const app = {
         const docLabel = document.getElementById('nrDocLabel').value.trim() || 'Document No';
         const collected = this.collectNrFields();
         const fields = collected.map(f => ({ label: f.label, options: f.options }));
-        const lead = collected.find(f => f.isLead);
-        const leadFieldLabel = lead ? lead.label : '';
+        // Any number of Lead fields; leadFieldLabel keeps the first one for
+        // copies of the app (and sheet data) from before multi-lead.
+        const leadFieldLabels = collected.filter(f => f.isLead).map(f => f.label);
+        const leadFieldLabel = leadFieldLabels[0] || '';
         if (!Array.isArray(this.lists.narrationTypes)) this.lists.narrationTypes = [];
 
         if (this.editingNrId) {
             const nr = this.lists.narrationTypes.find(x => String(x.id) === String(this.editingNrId));
-            if (nr) { nr.name = name; nr.hasPercent = hasPercent; nr.phrase = phrase; nr.docLabel = docLabel; nr.fields = fields; nr.leadFieldLabel = leadFieldLabel; }
+            if (nr) { nr.name = name; nr.hasPercent = hasPercent; nr.phrase = phrase; nr.docLabel = docLabel; nr.fields = fields; nr.leadFieldLabel = leadFieldLabel; nr.leadFieldLabels = leadFieldLabels; }
         } else {
             if (this.lists.narrationTypes.some(x => x.name.toLowerCase() === name.toLowerCase())) {
                 this.showToast('A narration type with that name already exists.', 'warning');
                 return;
             }
-            this.lists.narrationTypes.push({ id: this.newId(), name, hasPercent, phrase, docLabel, fields, leadFieldLabel });
+            this.lists.narrationTypes.push({ id: this.newId(), name, hasPercent, phrase, docLabel, fields, leadFieldLabel, leadFieldLabels });
         }
 
         this.saveLists();
@@ -4852,51 +5465,194 @@ const app = {
         const name = el ? el.value : '';
         const sc = (this.lists.subCategories || []).find(x => x.name === name);
         if (!sc || !sc.fields || !sc.fields.length) return '';
-        const vals = this.collectSubCategoryFields();
+        return this.subCategoryText(sc, this.collectSubCategoryFields());
+    },
+
+    // "Label: value" for each filled Sub Category field — except the
+    // vendor / payee field, which never goes into the narration (it leads
+    // the report line instead). A label typed with its own colon
+    // ("Vendor Name:") no longer comes out as "Vendor Name::".
+    subCategoryText(sc, vals) {
+        if (!sc || !sc.fields || !sc.fields.length) return '';
+        vals = vals || {};
         return sc.fields.map(f => {
+            if (this.PAYEE_RX.test(String(f.label || ''))) return '';
             const v = (vals[f.label] || '').toString().trim();
-            return v ? (f.label + ': ' + v) : '';
+            return v ? (String(f.label).replace(/[\s:]+$/, '') + ': ' + v) : '';
         }).filter(Boolean).join(', ');
     },
 
-    // Pure builder. Standard form: "Being " + [%] + fixed phrase + doc no +
-    // [extra fields] + [note] + [sub category fields] + Mail Chain. If the
-    // type names a lead field and it has a value, that becomes
-    // "<value> : " up front instead of "Being ...", and Mail Chain is left
-    // off entirely.
+    // Vendor typed into a Sub Category field (e.g. COD Charges → "Vendor Name").
+    subCategoryPayee(task) {
+        const sc = (this.lists.subCategories || []).find(x => x.name === (task && task.subCategory));
+        if (!sc || !sc.fields) return '';
+        const vals = (task && task.subCategoryFields) || {};
+        const f = sc.fields.find(x => this.PAYEE_RX.test(String(x.label || '')) && String(vals[x.label] || '').trim());
+        return f ? String(vals[f.label]).trim() : '';
+    },
+
+    // Sub Category part of a saved narration, rebuilt with the current rules
+    // when the Sub Category is known on this device.
+    narrationSubText(task) {
+        const sc = (this.lists.subCategories || []).find(x => x.name === task.subCategory);
+        if (sc) return this.subCategoryText(sc, task.subCategoryFields);
+        const n = task.narration || {};
+        return n.subCategoryText !== undefined ? n.subCategoryText : '';
+    },
+
+    /* Payee fields (the type's lead field, or any field named like
+       "Name of Payee" / "Vendor Name" / "Beneficiary" / "Party Name")
+       are NEVER part of the Generated Narration. They are used only in the
+       Daily Activity Report, as "Payee Name: <narration without mail chain>". */
+    // Only a label that IS the vendor's name counts as the payee field —
+    // "Vendor Name", "Name of Payee", "Pay To", "Party Name", "Beneficiary".
+    // Other fields that merely mention the vendor ("Vendor Invoice No",
+    // "Supplier GSTIN") are ordinary fields and go into the narration.
+    PAYEE_RX: /^\s*(?:name\s+of\s+(?:the\s+)?)?(?:vendor|payee|paye|pay\s*to|party|beneficiary|supplier)(?:'?s)?(?:\s+name)?\s*:*\s*$/i,
+
+    // Lead fields of a narration type (several allowed; older types saved
+    // a single leadFieldLabel).
+    leadLabels(nr) {
+        if (!nr) return [];
+        if (Array.isArray(nr.leadFieldLabels)) return nr.leadFieldLabels.filter(Boolean);
+        return nr.leadFieldLabel ? [nr.leadFieldLabel] : [];
+    },
+
+    isPayeeField(nr, label) {
+        if (!label) return false;
+        return this.leadLabels(nr).indexOf(label) !== -1 || this.PAYEE_RX.test(String(label));
+    },
+
+    // Vendor name hidden in a mail subject, e.g.
+    // "PURE EV: Purchase Order - G Power Auto Parts - INPO/PP/26-27/0155 - PURE Energy"
+    // → "G Power Auto Parts" (the part just before the PO / reference number).
+    payeeFromMail(mail) {
+        const s = String(mail || '').replace(/\s+/g, ' ').trim();
+        if (!s) return '';
+        const parts = s.split(/\s+[-–—|]\s+/).map(x => x.trim()).filter(Boolean);
+        const isRef = (p) => /[A-Z]{2,}[A-Z0-9]*\/[A-Z0-9/-]*\d/i.test(p) || /^(po|wo|inv|invoice|bill)\s*(no\.?|#|:)?\s*\d/i.test(p);
+        const isLabel = (p) => /:\s*$/.test(p) || (/(purchase|work|service)\s+order|^po$|^invoice$|^payment$|^re:|^fw:|^fwd:/i.test(p) && p.split(' ').length <= 5);
+        const i = parts.findIndex(isRef);
+        for (let j = i - 1; j >= 0; j--) { if (!isLabel(parts[j]) && !isRef(parts[j])) return parts[j]; }
+        const k = parts.findIndex(p => /(purchase|work|service)\s+order/i.test(p));
+        if (k >= 0 && parts[k + 1] && !isRef(parts[k + 1])) return parts[k + 1];
+        return '';
+    },
+
+    // Vendor for a task: the Name of Paye field, else the one in the mail chain.
+    taskPayee(t) {
+        const n = (t && t.narration) || {};
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
+        return String((nr && this.payeeValue(nr, n.fieldsValues)) || this.subCategoryPayee(t) || this.payeeFromMail(t && t.mailChain) || '').trim();
+    },
+
+    // Takes the vendor name out of a mail chain (for the Tally narration).
+    stripPayeeFromMail(mail, payee) {
+        let s = String(mail || '');
+        const p = String(payee || '').trim();
+        if (!s || !p) return s.trim();
+        const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        s = s.replace(new RegExp('\\s*[-–—|]\\s*' + esc + '(?=\\s*[-–—|]|\\s*$)', 'i'), '')
+             .replace(new RegExp(esc, 'i'), '');
+        return s.replace(/\s*[-–—|]\s*[-–—|]\s*/g, ' - ').replace(/^\s*[-–—|]\s*|\s*[-–—|]\s*$/g, '').replace(/\s+/g, ' ').trim();
+    },
+
+    // Text that leads the report line: every filled Lead field, in the
+    // type's field order, joined with " - " (e.g. "Devi Cargo Movers -
+    // DCM01"); with no Lead fields, the first vendor-name field.
+    payeeValue(nr, fieldsValues) {
+        fieldsValues = fieldsValues || {};
+        const val = (l) => String(fieldsValues[l] || '').trim();
+        const leads = this.leadLabels(nr);
+        if (leads.length) {
+            const order = (nr.fields || []).map(f => f.label).filter(l => leads.indexOf(l) !== -1)
+                .concat(leads.filter(l => !(nr.fields || []).some(f => f.label === l)));
+            const got = order.map(val).filter(Boolean);
+            if (got.length) return got.join(' - ');
+        }
+        const labels = (nr && nr.fields ? nr.fields.map(f => f.label) : []).concat(Object.keys(fieldsValues));
+        for (const l of labels) {
+            if (this.PAYEE_RX.test(String(l)) && val(l)) return val(l);
+        }
+        return '';
+    },
+
+    // Generated Narration (Tally): "Being " + [%] + phrase + doc no +
+    // [other extra fields] + [note] + [sub category fields] + Mail Chain.
+    // Payee is left out.
     buildNarrationText(nr, percent, docNo, purpose, mailChain, fieldsValues, subCategoryText) {
         if (!nr) return '';
         fieldsValues = fieldsValues || {};
-
         const extraBits = (nr.fields || [])
-            .filter(f => f.label !== nr.leadFieldLabel)
+            .filter(f => !this.isPayeeField(nr, f.label))
             .map(f => (fieldsValues[f.label] || '').toString().trim())
             .filter(Boolean);
-
-        let middle = (nr.phrase || '') + String(docNo || '').trim();
-        [extraBits.join(' '), String(purpose || '').trim(), String(subCategoryText || '').trim()]
-            .filter(Boolean)
-            .forEach(bit => { middle += ' ' + bit; });
-
-        const leadValue = nr.leadFieldLabel ? (fieldsValues[nr.leadFieldLabel] || '').toString().trim() : '';
-        if (nr.leadFieldLabel && leadValue) {
-            const pct = (nr.hasPercent && String(percent || '').trim()) ? String(percent).trim() + '% ' : '';
-            return leadValue + ' : ' + pct + middle;
-        }
-
         let text = 'Being ';
         if (nr.hasPercent && String(percent || '').trim()) text += String(percent).trim() + '% ';
-        text += middle;
-        if (String(mailChain || '').trim()) text += ' ' + String(mailChain).trim();
-        return text;
+        text += (nr.phrase || '') + String(docNo || '').trim();
+        [extraBits.join(' '), String(purpose || '').trim(), String(subCategoryText || '').trim()]
+            .filter(Boolean).forEach(bit => { text += ' ' + bit; });
+        if (String(mailChain || '').trim()) {
+            // never put the vendor name into the Tally narration — not even
+            // through the mail subject
+            const payee = this.payeeValue(nr, fieldsValues) || this.payeeFromMail(mailChain);
+            const mail = this.stripPayeeFromMail(mailChain, payee);
+            if (mail) text += ' ' + mail;
+        }
+        return text.replace(/\s+/g, ' ').trim();
+    },
+
+    // Daily Activity Report line: "Payee Name: <narration without mail chain>".
+    // Report line for a payment: "Vendor Name: <narration with mail chain>".
+    buildNarrationReportText(nr, percent, docNo, purpose, fieldsValues, subCategoryText, mailChain) {
+        const body = this.buildNarrationText(nr, percent, docNo, purpose, mailChain || '', fieldsValues, subCategoryText);
+        const payee = this.payeeValue(nr, fieldsValues);
+        return payee ? payee + ': ' + body : body;
+    },
+
+    // Always built from the saved parts with the CURRENT rules, so entries
+    // saved by older builds (payee inside the narration) come out right too.
+    narrationFor(task, kind) {
+        const n = task && task.narration;
+        if (!n) return '';
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId));
+        if (!nr) return n.text || n.reportText || '';
+        const sub = this.narrationSubText(task);
+        const mail = n.includeMail === false ? '' : task.mailChain;
+        return kind === 'report'
+            ? this.buildNarrationReportText(nr, n.percent, n.docNo, n.purpose, n.fieldsValues, sub, mail)
+            : this.buildNarrationText(nr, n.percent, n.docNo, n.purpose, mail, n.fieldsValues, sub);
+    },
+
+    subCategoryTextFor(task) {
+        const sc = (this.lists.subCategories || []).find(x => x.name === task.subCategory);
+        return this.subCategoryText(sc, task.subCategoryFields);
+    },
+
+    // Generated Narration stretches to the end of whatever row it lands on,
+    // so there is never an empty cell beside it.
+    fitNarrationSpan() {
+        const el = document.getElementById('narrationPreviewGroup');
+        const grid = el && el.parentElement;
+        if (!el || !grid) return;
+        el.style.gridColumn = '';
+        if (el.style.display === 'none' || !grid.clientWidth) return;
+        const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
+        if (cols < 3) return;
+        const g = grid.getBoundingClientRect(), r = el.getBoundingClientRect();
+        const colW = g.width / cols;
+        const start = Math.round((r.left - g.left) / colW);
+        const span = cols - start;
+        if (span > 2) el.style.gridColumn = 'span ' + span;
     },
 
     updateNarrationPreview() {
+        requestAnimationFrame(() => this.fitNarrationSpan());
         const preview = document.getElementById('narrationPreview');
         if (!preview) return;
         const name = document.getElementById('taskNarrationType').value;
         const nr = (this.lists.narrationTypes || []).find(x => x.name === name);
-        const mailChain = document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value : '';
+        const mailChain = this.narrationIncludesMail() && document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value : '';
         preview.value = nr ? this.buildNarrationText(
             nr,
             document.getElementById('narrationPercent') ? document.getElementById('narrationPercent').value : '',
@@ -4908,6 +5664,12 @@ const app = {
         ) : '';
     },
 
+    // "Include mail chain" tick beside Generated Narration (default on).
+    narrationIncludesMail() {
+        const el = document.getElementById('narrationIncludeMail');
+        return !el || el.checked;
+    },
+
     // Reads the form into a narration object to store on the task, or null
     // if no Narration Type is selected (the feature is entirely optional).
     collectNarration() {
@@ -4917,16 +5679,16 @@ const app = {
         const percent = document.getElementById('narrationPercent') ? document.getElementById('narrationPercent').value.trim() : '';
         const docNo = document.getElementById('narrationDocNo') ? document.getElementById('narrationDocNo').value.trim() : '';
         const purpose = document.getElementById('narrationPurpose') ? document.getElementById('narrationPurpose').value.trim() : '';
-        const mailChain = document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value.trim() : '';
+        const includeMail = this.narrationIncludesMail();
+        const mailChain = includeMail && document.getElementById('taskMailChain') ? document.getElementById('taskMailChain').value.trim() : '';
         const fieldsValues = this.collectNarrationExtraFields();
         const subCategoryText = this.currentSubCategoryFieldsText();
         return {
-            typeId: nr.id, typeName: nr.name, percent, docNo, purpose, fieldsValues,
-            // Full text (with Mail Chain) for Tally / Copy Narration.
+            typeId: nr.id, typeName: nr.name, percent, docNo, purpose, fieldsValues, subCategoryText, includeMail,
+            // Tally text (with Mail Chain, without payee) for Copy Narration.
             text: this.buildNarrationText(nr, percent, docNo, purpose, mailChain, fieldsValues, subCategoryText),
-            // Same narration without the Mail Chain — what the Daily
-            // Activity Report actually uses (see reportDetailsFor).
-            reportText: this.buildNarrationText(nr, percent, docNo, purpose, '', fieldsValues, subCategoryText)
+            // Daily Activity Report: "Payee: narration" without Mail Chain.
+            reportText: this.buildNarrationReportText(nr, percent, docNo, purpose, fieldsValues, subCategoryText)
         };
     },
 
@@ -4938,6 +5700,8 @@ const app = {
         document.getElementById('narrationPercent').value = narration ? (narration.percent || '') : '';
         document.getElementById('narrationDocNo').value = narration ? (narration.docNo || '') : '';
         document.getElementById('narrationPurpose').value = narration ? (narration.purpose || '') : '';
+        const incl = document.getElementById('narrationIncludeMail');
+        if (incl) incl.checked = !(narration && narration.includeMail === false);
         const nr = (this.lists.narrationTypes || []).find(x => x.name === (narration && narration.typeName));
         this.renderNarrationExtraFields(nr, narration ? narration.fieldsValues : {});
         this.updateNarrationPreview();
@@ -5040,6 +5804,7 @@ const app = {
             mailChain: document.getElementById('taskMailChain').value.trim(),
             recurrence: document.getElementById('taskRecurrence').value || 'None',
             notes: document.getElementById('taskNotes').value,
+            darInclude: (document.getElementById('taskDarInclude') || { checked: true }).checked,
             keyPoints: this.collectKeyPoints(),
             paymentDetails: this.collectPaymentDetails(),
             subCategoryFields: this.collectSubCategoryFields(),
@@ -5090,10 +5855,11 @@ const app = {
             if (this.storedEmailId) task.emailId = this.storedEmailId;
 
             if (task.status === 'Completed') {
-                if (!task.completedDate) task.completedDate = todayStr;
+                if (!task.completedDate || statusChanged) task.completedDate = todayStr;
             } else {
                 task.completedDate = null;
             }
+            if (statusChanged && !this.isUnstartedStatus(fields.status)) this.noteWork(task, fields.status);
 
             // Any real status move (not landing back on "Not yet started")
             // is a day's work worth reporting — completing it is just one
@@ -5116,6 +5882,7 @@ const app = {
                 emailId: this.storedEmailId || null
             }, fields);
             if (task.status === 'Completed') task.completedDate = todayStr;
+            if (!this.isUnstartedStatus(task.status)) this.noteWork(task, task.status);
             this.tasks.push(task);
             // A brand-new entry isn't "work done today" by itself — unless
             // it was logged already at a real (non-"Not yet started")
@@ -5206,9 +5973,10 @@ const app = {
     // the alarm popup's Mark done). If the category needs a Sub Category,
     // its fields must be filled in first: open the entry so they can be
     // entered, instead of silently marking it done without them.
-    tryCompleteTask(id) {
+    tryCompleteTask(id, dar = true) {
         const t = this.findTask(id);
         if (!t) return;
+        this._pendingDar = dar !== false;
         if (!this.subCategoryComplete(t)) {
             // Silence any active overdue alert for today so it doesn't pop
             // back up while the required fields are being filled in.
@@ -5222,18 +5990,24 @@ const app = {
             this.updateConditionalFields();
             this.setSelectValue('taskSubCategory', t.subCategory || '');
             this.renderSubCategoryFields(t.subCategoryFields || {});
+            const darBox = document.getElementById('taskDarInclude');
+            if (darBox) darBox.checked = dar !== false;
             this.showToast('Select a Sub Category and fill in its details, then save to mark this done.', 'warning');
             return;
         }
-        this.markComplete(id);
+        this.markComplete(id, dar);
     },
 
-    markComplete(id) {
+    // dar = true  → "Done + DAR": listed in the Daily Activity Report
+    // dar = false → "Done": completed, but left out of the report
+    markComplete(id, dar = true) {
         const t = this.findTask(id);
         if (!t) return;
 
         t.status = 'Completed';
+        t.darInclude = dar !== false;
         t.completedDate = this.getLocalDateStr(new Date());
+        this.noteWork(t, 'Completed');
         t.lastAckDate = null;
         t.snoozeUntil = null;
         t.updatedAt = this.stamp();
@@ -5490,14 +6264,16 @@ const app = {
         const open = live.filter(t => t.status !== 'Completed');
         const done = live.filter(t => t.status === 'Completed');
 
+        // One clock for every card, so the numbers always add up:
+        // Pending as on Today = Due Today (still on the clock) + Overdue.
         const overdue = open.filter(t => this.isDateInRange(t, 'Overdue'));
-        const dueToday = open.filter(t => this.isDateInRange(t, 'Today'));
+        const dueToday = open.filter(t => this.isDateInRange(t, 'DueTodayOpen'));
         const next7 = open.filter(t => this.isDateInRange(t, 'Next7Days'));
         const thisMonth = open.filter(t => this.isDateInRange(t, 'ThisMonth'));
         const monthName = new Date().toLocaleDateString('en-IN', { month: 'long' });
         const noDue = open.filter(t => !t.dueDate);
         const pendingNow = open.filter(t => (t.status || 'Pending') === 'Pending');
-        const pendingToday = open.filter(t => this.isDateInRange(t, 'DueByToday'));
+        const pendingToday = open.filter(t => this.isDateInRange(t, 'Overdue') || this.isDateInRange(t, 'DueTodayOpen'));
 
         const todayStr = this.getLocalDateStr(new Date());
         const in7 = new Date(); in7.setDate(in7.getDate() + 7);
@@ -5532,17 +6308,19 @@ const app = {
         /* ---- due-date cards ---- */
         heroBox.innerHTML = [
             this.dashTile({
+                title: 'Pending as on Today', count: pendingToday.length, colour: 'var(--red)',
+                ftype: 'pendingToday', fvalue: 'DueByToday',
+                sub: pendingToday.length ? 'Overdue + due today' : 'Nothing pending as of today'
+            }),
+            this.dashTile({
                 title: 'Due Today', count: dueToday.length, colour: 'var(--blue)',
-                ftype: 'due', fvalue: 'Today',
-                sub: dueToday.length ? 'On the clock' : 'Nothing to do Today'
+                ftype: 'due', fvalue: 'DueTodayOpen',
+                sub: dueToday.length ? 'Still on the clock' : 'Nothing left for today'
             }),
             this.dashTile({
                 title: 'Overdue', count: overdue.length, colour: 'var(--red)',
                 ftype: 'due', fvalue: 'Overdue',
-                // No overdue entries: say so plainly. This is a display-only
-                // state — it's never written to a task and never logged as
-                // activity, so it can't show up in the Daily Activity Report.
-                sub: overdue.length ? 'Needs attention' : 'Nothing to do Today'
+                sub: overdue.length ? 'Past the due time' : 'Nothing overdue'
             }),
             this.dashTile({
                 title: 'Next 7 Days', count: next7.length, colour: 'var(--amber)',
@@ -5563,11 +6341,6 @@ const app = {
                 title: 'Pending', count: pendingNow.length, colour: 'var(--amber)',
                 ftype: 'status', fvalue: 'Pending',
                 sub: 'As of now'
-            }),
-            this.dashTile({
-                title: 'Pending as on Today', count: pendingToday.length, colour: 'var(--red)',
-                ftype: 'pendingToday', fvalue: 'DueByToday',
-                sub: pendingToday.length ? 'Due today or earlier, still open' : 'Nothing pending as of today'
             })
         ].join('');
 
@@ -6296,6 +7069,265 @@ const app = {
             toast.style.opacity = '0';
             setTimeout(() => toast.remove(), 350);
         }, life);
+    }
+};
+
+/* ================================================================
+   REALTIME SYNC — Google Firebase Firestore
+   ----------------------------------------------------------------
+   • Every device keeps a live listener on the database: a change made on
+     one device arrives on the others in about a second. No polling.
+   • One small document per entry (users/<you>/tasks/<id>), written only
+     when that entry changes. Deletions remove the document.
+   • Offline: Firestore's own offline queue holds writes and sends them
+     when the connection is back.
+   • Conflicts: newest updatedAt wins (same rule as before).
+   • Only you can read/write your data (Google sign-in + security rules).
+   The Google Sheet keeps being updated every 5 minutes as a backup copy.
+   ================================================================ */
+const rt = {
+    CFG_KEY: 'pureEnergyFirebaseConfig',
+    OFF_KEY: 'pureEnergyFirebaseOff',
+    // Your project "Working-Dashboard" — built in, so every device connects
+    // with just a Google sign-in. (A config pasted in Connection overrides it.)
+    BUILT_IN: {
+        apiKey: "AIzaSyCUQBToPJWSGXoiy5BnD3d9E1YEFiT4LhI",
+        authDomain: "working-dashboard-655ca.firebaseapp.com",
+        projectId: "working-dashboard-655ca",
+        storageBucket: "working-dashboard-655ca.firebasestorage.app",
+        messagingSenderId: "576017598084",
+        appId: "1:576017598084:web:5e1bb752595113dc1524d1"
+    },
+    SDK: 'https://www.gstatic.com/firebasejs/10.12.2/',
+    active: false, ready: false, uid: null, db: null, auth: null,
+    unsub: [], _pushTimer: null, _pushing: false, _again: false, state: 'off',
+
+    config() {
+        if (localStorage.getItem(this.OFF_KEY) === '1') return null;
+        const raw = localStorage.getItem(this.CFG_KEY) || '';
+        return (raw && this.parseConfig(raw)) || this.BUILT_IN;
+    },
+
+    // Accepts the snippet exactly as Firebase shows it
+    // (const firebaseConfig = { apiKey: "...", ... };) or plain JSON.
+    parseConfig(text) {
+        const s = String(text || '');
+        const get = (k) => { const m = new RegExp(k + '\\s*["\']?\\s*:\\s*["\']([^"\']+)["\']').exec(s); return m ? m[1].trim() : ''; };
+        const cfg = { apiKey: get('apiKey'), authDomain: get('authDomain'), projectId: get('projectId'),
+            appId: get('appId'), storageBucket: get('storageBucket'), messagingSenderId: get('messagingSenderId') };
+        return cfg.apiKey && cfg.projectId ? cfg : null;
+    },
+
+    loadScript(src) {
+        return new Promise((res, rej) => {
+            if (document.querySelector('script[data-fb="' + src + '"]')) return res();
+            const el = document.createElement('script');
+            el.src = src; el.async = true; el.dataset.fb = src;
+            el.onload = () => res(); el.onerror = () => rej(new Error('Could not load Firebase (' + src.split('/').pop() + ')'));
+            document.head.appendChild(el);
+        });
+    },
+
+    // ---- per-device bookkeeping (separate from the Sheet sync's) ----
+    ackKey() { return 'pureEnergyRtAck_' + (this.uid || 'x'); },
+    ack() { if (!this._ack) { try { this._ack = JSON.parse(localStorage.getItem(this.ackKey()) || '{}') || {}; } catch (e) { this._ack = {}; } } return this._ack; },
+    saveAck() { try { localStorage.setItem(this.ackKey(), JSON.stringify(this._ack || {})); } catch (e) {} },
+
+    setState(state, note) {
+        this.state = state;
+        const pill = document.getElementById('saveStatus');
+        const colours = { live: 'var(--green)', offline: 'var(--amber)', connecting: 'var(--blue)', error: 'var(--red)', signin: 'var(--amber)' };
+        const words = { live: 'live', offline: 'offline — queued', connecting: 'connecting…', error: 'realtime error', signin: 'sign in to sync' };
+        if (pill && state !== 'off') pill.innerHTML = '<span class="dot" style="background:' + (colours[state] || 'var(--label-2)') + '"></span> ' + (words[state] || state);
+        const box = document.getElementById('rtStatus');
+        if (box) box.innerHTML = this.statusHtml(note);
+        if (window.app && app.renderSyncHealth) app.renderSyncHealth();
+    },
+
+    statusHtml(note) {
+        if (!this.config()) return 'Switched off — tap "Save & connect" to turn realtime sync back on.';
+        const u = this.auth && this.auth.currentUser;
+        const txt = { live: '🟢 Live — changes appear on your other devices within a second.', offline: '🟠 Offline — edits are queued and will upload automatically.',
+            connecting: '🔵 Connecting…', signin: '🟠 Signed out — tap "Sign in with Google".', error: '🔴 ' + (note || 'Error') }[this.state] || '';
+        return txt + (u ? '<br>Signed in as <b>' + app.sanitize(u.email || u.uid) + '</b>' : '') + (note && this.state !== 'error' ? '<br>' + app.sanitize(note) : '');
+    },
+
+    /* ---------- start ---------- */
+    init() {
+        const cfg = this.config();
+        if (!cfg) { this.active = false; return Promise.resolve(); }
+        this.active = true;
+        this.setState('connecting');
+        return this.loadScript(this.SDK + 'firebase-app-compat.js')
+            .then(() => Promise.all([this.loadScript(this.SDK + 'firebase-auth-compat.js'), this.loadScript(this.SDK + 'firebase-firestore-compat.js')]))
+            .then(() => {
+                if (!firebase.apps.length) firebase.initializeApp(cfg);
+                this.auth = firebase.auth();
+                this.db = firebase.firestore();
+                try { this.db.enablePersistence({ synchronizeTabs: true }).catch(() => {}); } catch (e) {}
+                try { this.auth.getRedirectResult().catch(() => {}); } catch (e) {}
+                this.auth.onAuthStateChanged(user => this.onAuth(user));
+            })
+            .catch(err => { this.setState('error', err.message); });
+    },
+
+    signIn() {
+        if (!this.auth) { this.init(); app.showToast('Connecting to Firebase… tap Sign in again in a moment.', 'info'); return; }
+        const provider = new firebase.auth.GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        this.auth.signInWithPopup(provider).catch(err => {
+            if (err && /popup|blocked|operation-not-supported/i.test(err.code || err.message || '')) return this.auth.signInWithRedirect(provider);
+            this.setState('error', this.explain(err));
+            app.showToast(this.explain(err), 'error');
+        });
+    },
+
+    signOut() {
+        this.stopListening();
+        if (this.auth) this.auth.signOut();
+        this.setState('signin');
+    },
+
+    disconnect() {
+        this.signOut();
+        localStorage.removeItem(this.CFG_KEY);
+        localStorage.setItem(this.OFF_KEY, '1');
+        this.active = false; this.state = 'off';
+        app.showToast('Realtime sync switched off — using the Google Sheet only.', 'info');
+        const box = document.getElementById('rtStatus'); if (box) box.innerHTML = this.statusHtml();
+    },
+
+    explain(err) {
+        const c = (err && (err.code || '')) + ' ' + (err && err.message || '');
+        if (/unauthorized-domain/i.test(c)) return 'This web address is not allowed yet: Firebase → Authentication → Settings → Authorized domains → add ' + location.hostname;
+        if (/permission-denied|insufficient permissions/i.test(c)) return 'Firestore rules block access — paste the rules from the setup steps (Firestore → Rules → Publish).';
+        if (/api-key|invalid-api-key/i.test(c)) return 'The Firebase config looks wrong — copy it again from Project settings → Your apps.';
+        if (/operation-not-allowed/i.test(c)) return 'Google sign-in is not enabled: Firebase → Authentication → Sign-in method → Google → Enable.';
+        if (/unavailable|network/i.test(c)) return 'No connection to Firebase right now — edits are kept and will upload.';
+        return (err && err.message) || 'Firebase error';
+    },
+
+    onAuth(user) {
+        this.stopListening();
+        this._ack = null;
+        if (!user) {
+            this.uid = null; this.ready = false; this.setState('signin');
+            if (!this._askedSignIn) {
+                this._askedSignIn = true;
+                setTimeout(() => app.showToast('Turn on live sync across your devices — sign in with your Google account once.', 'info',
+                    { label: 'Sign in', onClick: () => this.signIn() }), 1500);
+            }
+            return;
+        }
+        this.uid = user.uid;
+        this.ready = true;
+        this.listen();
+        this.schedulePush(50);   // upload anything this device has that the database doesn't
+    },
+
+    col(name) { return this.db.collection('users').doc(this.uid).collection(name); },
+
+    stopListening() { this.unsub.forEach(u => { try { u(); } catch (e) {} }); this.unsub = []; },
+
+    /* ---------- incoming: live listener ---------- */
+    listen() {
+        const ack = this.ack();
+        this.unsub.push(this.col('tasks').onSnapshot({ includeMetadataChanges: true }, snap => {
+            const incoming = [], removed = [];
+            snap.docChanges().forEach(ch => {
+                if (ch.type === 'removed') { if (!ch.doc.metadata.hasPendingWrites) removed.push(ch.doc.id); return; }
+                const d = ch.doc.data();
+                if (!d || !d.id) return;
+                incoming.push(d);
+            });
+            let moved = 0;
+            if (removed.length) moved += app.applyRemoteTombstones(removed);
+            if (incoming.length) {
+                const r = app.mergeTasks(incoming);
+                moved += r.added + r.updated;
+                incoming.forEach(d => {
+                    const local = app.findTask(d.id);
+                    if (local && (Number(local.updatedAt) || 0) === (Number(d.updatedAt) || 0)) ack[String(d.id)] = Number(d.updatedAt) || 0;
+                });
+                this.saveAck();
+            }
+            if (moved) {
+                this._fromRemote = true;
+                app.saveData();
+                this._fromRemote = false;
+                if (!app.editorOpen()) app.populateDropdowns();
+                app.renderTable();
+                if (app.currentTab === 'Dashboard' && app.renderDashboard) app.renderDashboard();
+            }
+            this.setState(snap.metadata.fromCache ? 'offline' : 'live');
+            if (!snap.metadata.fromCache) app.noteSyncResult(true);
+        }, err => { this.setState('error', this.explain(err)); }));
+
+        this.unsub.push(this.col('meta').onSnapshot(snap => {
+            snap.docChanges().forEach(ch => {
+                if (ch.type === 'removed') return;
+                const d = ch.doc.data() || {};
+                if (ch.doc.id === 'lists' && d.lists) { app.applyRemoteLists(d.lists, d.ts); this.metaAck('lists', d.ts); }
+                if (ch.doc.id === 'calendar' && Array.isArray(d.holidays)) {
+                    app.applyRemoteCalendar({ holidays: d.holidays, leaveDays: d.leaveDays || [], customCalendars: d.customCalendars || [], holidaysUpdatedAt: d.ts });
+                    this.metaAck('calendar', d.ts);
+                }
+            });
+            if (!app.editorOpen()) app.populateDropdowns();
+        }, () => {}));
+    },
+
+    metaAck(k, ts) { const a = this.ack(); a['__' + k] = Math.max(Number(a['__' + k]) || 0, Number(ts) || 0); this.saveAck(); },
+
+    /* ---------- outgoing: only what changed ---------- */
+    schedulePush(delay) {
+        if (!this.active || !this.ready) return;
+        clearTimeout(this._pushTimer);
+        this._pushTimer = setTimeout(() => this.push(), delay === undefined ? 300 : delay);
+    },
+
+    clean(obj) { return JSON.parse(JSON.stringify(obj)); },   // Firestore rejects undefined
+
+    push() {
+        if (!this.ready) return Promise.resolve();
+        if (this._pushing) { this._again = true; return Promise.resolve(); }
+        const ack = this.ack();
+        const dirty = app.tasks.filter(t => t && t.id && ack[String(t.id)] !== (Number(t.updatedAt) || 0));
+        const tomb = app._tomb || app.loadTombstones();
+        const dels = (tomb.rtPending || []).slice();
+        const listsDirty = (app.listsUpdatedAt || 0) > (Number(ack.__lists) || 0);
+        const calDirty = (app.holidaysUpdatedAt || 0) > (Number(ack.__calendar) || 0);
+        if (!dirty.length && !dels.length && !listsDirty && !calDirty) return Promise.resolve();
+
+        this._pushing = true;
+        const batches = [];
+        let b = this.db.batch(), n = 0;
+        const add = (fn) => { if (n >= 450) { batches.push(b); b = this.db.batch(); n = 0; } fn(b); n++; };
+        const sent = dirty.map(t => ({ id: String(t.id), ts: Number(t.updatedAt) || 0 }));
+        dirty.forEach(t => add(bb => bb.set(this.col('tasks').doc(String(t.id)), this.clean(t))));
+        dels.forEach(id => add(bb => bb.delete(this.col('tasks').doc(String(id)))));
+        if (listsDirty) add(bb => bb.set(this.col('meta').doc('lists'), this.clean({ lists: app.lists, ts: app.listsUpdatedAt || 0 })));
+        if (calDirty) add(bb => bb.set(this.col('meta').doc('calendar'), this.clean({ holidays: app.holidays, leaveDays: app.leaveDays || [], customCalendars: app.customCalendars || [], ts: app.holidaysUpdatedAt || 0 })));
+        batches.push(b);
+
+        // With offline persistence the write is safely queued on this device
+        // at once; commit() resolves when the server has it.
+        sent.forEach(s => { ack[s.id] = s.ts; });
+        if (listsDirty) ack.__lists = app.listsUpdatedAt || 0;
+        if (calDirty) ack.__calendar = app.holidaysUpdatedAt || 0;
+        tomb.rtPending = (tomb.rtPending || []).filter(id => dels.indexOf(id) === -1);
+        app.saveTombstones(); this.saveAck();
+
+        return Promise.all(batches.map(x => x.commit()))
+            .then(() => { if (this.state !== 'live') this.setState('live'); })
+            .catch(err => {
+                // put them back so the next push retries
+                sent.forEach(s => { if (ack[s.id] === s.ts) delete ack[s.id]; });
+                tomb.rtPending = (tomb.rtPending || []).concat(dels.filter(id => (tomb.rtPending || []).indexOf(id) === -1));
+                app.saveTombstones(); this.saveAck();
+                this.setState('error', this.explain(err));
+            })
+            .finally(() => { this._pushing = false; if (this._again) { this._again = false; this.schedulePush(200); } });
     }
 };
 
