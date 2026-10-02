@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '69';
+const APP_BUILD = '70';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -1188,14 +1188,6 @@ const app = {
     dirtyTasks() {
         const ack = this.syncState().ack;
         return this.tasks.filter(t => t && t.id && ack[String(t.id)] !== (Number(t.updatedAt) || 0));
-    },
-
-    hasLocalChanges() {
-        const st = this.syncState();
-        if (!st.cursor) return true;
-        const tomb = this._tomb || this.loadTombstones();
-        return tomb.pending.length > 0 || (this.listsUpdatedAt || 0) > st.listsAck ||
-            (this.holidaysUpdatedAt || 0) > st.calAck || this.dirtyTasks().length > 0;
     },
 
     runSync(opts) {
@@ -3243,14 +3235,24 @@ const app = {
             const gear = document.getElementById(key + 'GearBtn');
             if (panel.contains(e.target) || (gear && gear.contains(e.target))) return;
             panel.classList.remove('open');
-            document.removeEventListener('click', onDoc, true);
+            this.dropFilterListener();
         };
+        this._fpHandler = onDoc;
         // Deferred so the click that opened the panel doesn't immediately close it.
-        setTimeout(() => document.addEventListener('click', onDoc, true), 0);
+        setTimeout(() => { if (this._fpHandler === onDoc) document.addEventListener('click', onDoc, true); }, 0);
     },
 
     closeAllFilterPanels() {
         document.querySelectorAll('.filter-panel.open').forEach(p => p.classList.remove('open'));
+        this.dropFilterListener();
+    },
+
+    // The outside-click listener used to be left behind whenever a panel was
+    // closed any way other than clicking outside it (gear again, Esc, filters
+    // cleared), so they piled up on the document.
+    dropFilterListener() {
+        if (this._fpHandler) document.removeEventListener('click', this._fpHandler, true);
+        this._fpHandler = null;
     },
 
     // Search keeps its own width now — clicking it no longer hides the
@@ -6857,7 +6859,6 @@ const pwa = {
 
     reg: null,
     hadController: false,
-    waitingWorker: null,
     reloading: false,
     version: null,
 
