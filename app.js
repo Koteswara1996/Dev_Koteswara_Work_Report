@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '70';
+const APP_BUILD = '71';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -1256,8 +1256,7 @@ const app = {
             const moved = res.added + res.updated + removed;
             if (moved) {
                 this.saveData();
-                if (!this.editorOpen()) this.populateDropdowns();
-                this.renderTable();
+                this.refreshUiWhenIdle();
             }
             this.noteSyncResult(true);
             const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
@@ -1336,8 +1335,9 @@ const app = {
         if (!manual && Date.now() < (this.syncBackoffUntil || 0)) return;
         // Only ONE window per device talks to the sheet.
         if (!manual && !this.claimSyncLeader()) return;
-        // Don't swap dropdowns under an open editor.
-        if (!manual && this.editorOpen()) return;
+        // An open editor no longer pauses sync (edits made elsewhere used to
+        // stay invisible, and yours stayed un-uploaded, for as long as a form
+        // was left open). Only the on-screen refresh waits — see refreshUiWhenIdle().
         // A request stuck for too long (phone slept) must not block forever.
         if (this._syncRunning && Date.now() - (this._syncStartedAt || 0) > this.REQUEST_TIMEOUT_MS + 10000) this._syncRunning = null;
         this._syncStartedAt = Date.now();
@@ -1354,6 +1354,20 @@ const app = {
         if (cur && cur.id !== this.TAB_ID && now - (Number(cur.ts) || 0) < this.SYNC_EVERY_MS * 3) return false;
         try { localStorage.setItem(this.LEADER_KEY, JSON.stringify({ id: this.TAB_ID, ts: now })); } catch (e) {}
         return true;
+    },
+
+    // Repaints the lists and tables now, or — while an editor is open, where
+    // swapping dropdowns under the user would be wrong — marks them stale so
+    // processEngine() repaints a moment after the editor closes.
+    refreshUiWhenIdle() {
+        if (this.editorOpen()) { this._uiDirty = true; return; }
+        this._uiDirty = false;
+        this.populateDropdowns();
+        this.renderTable();
+    },
+
+    flushDeferredUi() {
+        if (this._uiDirty && !this.editorOpen()) this.refreshUiWhenIdle();
     },
 
     EDITOR_MODALS: ['taskModal', 'listManagerModal', 'subCategoryRulesModal', 'narrationRulesModal', 'holidayModal', 'calendarManagerModal'],
@@ -1785,6 +1799,7 @@ const app = {
     },
 
     processEngine() {
+        this.flushDeferredUi();
         const now = new Date();
         const localTodayStr = this.getLocalDateStr(now);
         const activeOverdue = [];
@@ -2546,8 +2561,10 @@ const app = {
             localStorage.setItem(CONFIG.LISTS_TS_KEY, String(this.listsUpdatedAt));
         }
         localStorage.setItem(CONFIG.LISTS_KEY, JSON.stringify(this.lists));
-        this.populateDropdowns();
-        this.renderTable();
+        // Your own edits (bump) repaint at once; lists arriving from the sheet
+        // wait if an editor is open.
+        if (bump) { this.populateDropdowns(); this.renderTable(); }
+        else this.refreshUiWhenIdle();
         if (bump) this.syncToGoogleSheets();
     },
 
@@ -6194,7 +6211,7 @@ const app = {
                     if (task.deleted === undefined) task.deleted = false;
                     if (task.purged === undefined) task.purged = false;
                     if (!task.recurrence) task.recurrence = 'None';
-                    task.updatedAt = Number(task.updatedAt) || Date.now();
+                    task.updatedAt = Number(task.updatedAt) || 0;   // 0 = the file did not say when it was last edited
                     this.normalizeTaskShape(task);
                     delete task.overdueAlerted; delete task.overdueAcknowledged;
                     delete task.alerted; delete task.reminderSent;
@@ -6210,10 +6227,19 @@ const app = {
                     `Cancel = REPLACE everything`
                 );
 
+                // An entry the file gives no edit time for must not overwrite a copy
+                // you already have (stamping it "now" made it win every time).
+                // If you have it, yours is kept; if you don't, it is added as new.
+                const stampMissing = (t) => { if (!t.updatedAt) t.updatedAt = this.stamp(); };
+
                 if (merge) {
-                    const res = this.mergeTasks(importedTasks);
-                    this.showToast(`Merged: ${res.added} new, ${res.updated} updated`, 'success');
+                    const incoming = importedTasks.filter(t => t.updatedAt || !this.findTask(t.id));
+                    const kept = importedTasks.length - incoming.length;
+                    incoming.forEach(stampMissing);
+                    const res = this.mergeTasks(incoming);
+                    this.showToast(`Merged: ${res.added} new, ${res.updated} updated` + (kept ? `, ${kept} left as they were (no edit time in the file)` : ''), 'success');
                 } else {
+                    importedTasks.forEach(stampMissing);
                     if (!confirm("REPLACE all current entries with the imported file? This cannot be undone.")) {
                         this.showToast('Import cancelled', 'info');
                         return;
@@ -6805,9 +6831,11 @@ const pwa = {
             this.hadController = !!navigator.serviceWorker.controller;
             navigator.serviceWorker.addEventListener('controllerchange', () => {
                 if (this.reloading || !this.hadController) return;
-                this.reloading = true;
-                window.location.reload();
+                this.reloadWhenSafe();
             });
+            // While a form is open, an update (or the reload that follows it)
+            // waits here and runs a moment after the form closes.
+            setInterval(() => this.runPendingUpdate(), 2000);
 
             navigator.serviceWorker.addEventListener('message', (event) => {
                 const data = event.data || {};
@@ -6901,13 +6929,44 @@ const pwa = {
         }
     },
 
+    editorBusy() {
+        return typeof app !== 'undefined' && typeof app.editorOpen === 'function' && app.editorOpen();
+    },
+
+    // Reloads now, or as soon as no entry form is open — never while one is.
+    reloadWhenSafe() {
+        if (this.reloading) return;
+        if (this.editorBusy()) {
+            if (!this._reloadQueued && typeof app !== 'undefined' && app.showToast) {
+                app.showToast('Update ready — the app refreshes when you close this form.', 'info');
+            }
+            this._reloadQueued = true;
+            return;
+        }
+        this.reloading = true;
+        window.location.reload();
+    },
+
+    runPendingUpdate() {
+        if (this.editorBusy()) return;
+        if (this._reloadQueued) { this._reloadQueued = false; this.reloadWhenSafe(); return; }
+        if (this._updateQueued) { this._updateQueued = false; this.applyUpdate(); }
+    },
+
     applyUpdate() {
+        if (this.editorBusy()) {
+            // Don't swap files under a half-filled entry: finish first, then update.
+            this._updateQueued = true;
+            if (typeof app !== 'undefined' && app.showToast) app.showToast('Finish and save this entry — the update installs right after.', 'warning');
+            return;
+        }
         const worker = this.waitingWorker || (this.reg && this.reg.waiting);
-        if (!worker) { window.location.reload(); return; }
+        if (!worker) { this.reloadWhenSafe(); return; }
         if (typeof app !== 'undefined' && app.showToast) app.showToast('Updating…', 'info');
         worker.postMessage({ type: 'SKIP_WAITING' });
-        // If the worker does not hand over within a few seconds, reload anyway.
-        setTimeout(() => { if (!this.reloading) { this.reloading = true; window.location.reload(); } }, 4000);
+        // If the worker does not hand over within a few seconds, reload anyway
+        // (still not while a form is open).
+        setTimeout(() => this.reloadWhenSafe(), 4000);
     },
 
     silentUpdateCheck() {
