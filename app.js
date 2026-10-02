@@ -26,7 +26,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '75';
+const APP_BUILD = '76';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -7255,9 +7255,11 @@ const rt = {
                 this._fromRemote = true;
                 app.saveData();
                 this._fromRemote = false;
-                if (!app.editorOpen()) app.populateDropdowns();
-                app.renderTable();
-                if (app.currentTab === 'Dashboard' && app.renderDashboard) app.renderDashboard();
+                // Repaint now, or — if an entry form is open — right after it
+                // closes, so a live update never swaps the screen under the
+                // user mid-entry (same rule as the Google Sheets sync).
+                // renderTable() also redraws the Dashboard when it is showing.
+                app.refreshUiWhenIdle();
             }
             this.setState(snap.metadata.fromCache ? 'offline' : 'live');
             if (!snap.metadata.fromCache) app.noteSyncResult(true);
@@ -7273,7 +7275,7 @@ const rt = {
                     this.metaAck('calendar', d.ts);
                 }
             });
-            if (!app.editorOpen()) app.populateDropdowns();
+            app.refreshUiWhenIdle();
         }, () => {}));
     },
 
