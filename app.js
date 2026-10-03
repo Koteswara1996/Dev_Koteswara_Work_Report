@@ -26,7 +26,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '76';
+const APP_BUILD = '77';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -2360,6 +2360,7 @@ const app = {
 
     processEngine() {
         this.flushDeferredUi();
+        this.autoSkipDailyOnNonWorking();
         const now = new Date();
         const localTodayStr = this.getLocalDateStr(now);
         const activeOverdue = [];
@@ -2397,7 +2398,10 @@ const app = {
             // Sunday, or leave day, surface it a day early so there's time
             // to choose "do it today" or "move to the next working day"
             // before it's overdue on a day nothing can actually be done.
-            if (this.isDateInRange(t, 'Tomorrow') && this.isNonWorkingDay(t.dueDate) &&
+            // Asked from the LAST working day before it (Saturday for a
+            // Monday holiday too), so it can be preponed or postponed.
+            if (t.recurrence !== 'Daily' && t.dueDate > localTodayStr && this.isNonWorkingDay(t.dueDate) &&
+                this.prevWorkingDayFrom(t.dueDate) <= localTodayStr &&
                 t.lastAckDate !== localTodayStr && now.getTime() >= snoozeUntil) {
                 addOnce(t);
             }
@@ -2515,6 +2519,17 @@ const app = {
         const container = document.getElementById('alarmTasksContainer');
         if (!container) return;
         container.innerHTML = '';
+        const offDue = this.alarmingTasks.filter(t => t.recurrence !== 'Daily' && this.isNonWorkingDay(t.dueDate));
+        if (offDue.length > 1) {
+            const today = this.getLocalDateStr(new Date());
+            const canPre = offDue.some(t => this.prevWorkingDayFrom(t.dueDate) >= today);
+            const bar = document.createElement('div');
+            bar.style = 'display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 12px; margin-bottom:12px; border-radius:14px; font-size:0.82rem; font-weight:700; color:var(--amber-ink); background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.28);';
+            bar.innerHTML = '<span>' + offDue.length + ' tasks fall on ' + this.sanitize(this.nonWorkingLabel(offDue[0].dueDate)) + ' (office closed)</span><span style="display:flex; gap:8px; flex-wrap:wrap;">' +
+                (canPre ? '<button type="button" class="btn-row" onclick="app.resolveAllNonWorkingDue(\'prev\')" style="padding:6px 12px; font-size:0.76rem; font-weight:700; color:var(--green-ink); background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); border-radius:10px; cursor:pointer;">Prepone all</button>' : '') +
+                '<button type="button" class="btn-row go" onclick="app.resolveAllNonWorkingDue(\'next\')" style="padding:6px 12px; font-size:0.76rem; font-weight:700; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Postpone all</button></span>';
+            container.appendChild(bar);
+        }
 
         this.alarmingTasks.forEach(task => {
             const idAttr = this.escAttr(task.id);
@@ -2531,7 +2546,11 @@ const app = {
             el.className = 'alarm-card';
             el.style = 'padding: 14px 16px; margin-bottom: 12px; border-radius: 16px; background: rgba(255, 59, 48, 0.09); border: 1px solid rgba(255, 59, 48, 0.25);';
 
-            const nonWorking = this.isNonWorkingDay(task.dueDate);
+            const nonWorking = task.recurrence !== 'Daily' && this.isNonWorkingDay(task.dueDate);
+            // Prepone target: the last working day before it, never a day
+            // already gone (on the holiday itself only Postpone is offered).
+            const preDay = nonWorking ? this.prevWorkingDayFrom(task.dueDate) : '';
+            const preTo = preDay && preDay >= this.getLocalDateStr(new Date()) ? preDay : '';
             const deadlineCrossed = this.isDeadlineCrossed(task);
             const deadlineBanner = deadlineCrossed ? `
                 <div class="alarm-deadline" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); font-size: 0.78rem; color: var(--red-ink);">
@@ -2542,10 +2561,10 @@ const app = {
                 </div>` : '';
             const nonWorkingBanner = nonWorking ? `
                 <div class="alarm-nonworking" style="margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.25); font-size: 0.78rem; color: var(--amber-ink);">
-                    <div style="font-weight:700; margin-bottom:6px;">This due date falls on a holiday, Sunday, or leave day.</div>
+                    <div style="font-weight:700; margin-bottom:6px;">Due on ${this.sanitize(this.nonWorkingLabel(task.dueDate))} (${this.formatDateStr(task.dueDate)}) — the office is closed. ${preTo ? 'Prepone or postpone?' : 'Postpone it to the next working day?'}</div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                        <button type="button" class="btn-row" onclick="app.resolveNonWorkingDue('${this.jsArg(task.id)}', 'today')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--label); background:var(--fill); border:1px solid var(--line); border-radius:10px; cursor:pointer;">Do it today anyway</button>
-                        <button type="button" class="btn-row go" onclick="app.resolveNonWorkingDue('${this.jsArg(task.id)}', 'next')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Move to next working day</button>
+                        ${preTo ? `<button type="button" class="btn-row" onclick="app.resolveNonWorkingDue('${this.jsArg(task.id)}', 'prev')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--green-ink); background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); border-radius:10px; cursor:pointer;">Prepone to ${this.formatDateStr(preTo)}</button>` : ''}
+                        <button type="button" class="btn-row go" onclick="app.resolveNonWorkingDue('${this.jsArg(task.id)}', 'next')" style="padding:6px 12px; font-size:0.76rem; font-weight:600; color:var(--blue-ink); background:rgba(37,99,235,0.1); border:1px solid rgba(37,99,235,0.2); border-radius:10px; cursor:pointer;">Postpone to ${this.formatDateStr(this.nextWorkingDayFrom(task.dueDate))}</button>
                     </div>
                 </div>` : '';
 
@@ -3301,9 +3320,78 @@ const app = {
         const d = this.parseYMD(dateStr);
         if (!d) return false;
         if (d.getDay() === 0) return true; // Sunday
-        if (this.holidays.some(h => h.date === dateStr)) return true;
+        if (this.holidays.some(h => h.date === dateStr && this.isOfficeClosed(h))) return true;
         if (this.leaveDays.indexOf(dateStr) !== -1) return true;
         return false;
+    },
+
+    // "Office closed" tick on each holiday. Not set yet -> Indian / company /
+    // office holidays count as closed, USD (market) holidays don't.
+    isOfficeClosed(h) {
+        if (!h) return false;
+        if (typeof h.officeClosed === 'boolean') return h.officeClosed;
+        return /indian|india|company|office/i.test(String(h.type || ''));
+    },
+
+    // Why a date is off, for the prompts: holiday name, leave day or Sunday.
+    nonWorkingLabel(dateStr) {
+        const h = this.holidays.find(x => x.date === dateStr && this.isOfficeClosed(x));
+        if (h) return h.name;
+        if (this.leaveDays.indexOf(dateStr) !== -1) return 'your leave day';
+        return 'Sunday';
+    },
+
+    prevWorkingDayFrom(dateStr) {
+        const d = this.parseYMD(dateStr);
+        if (!d) return dateStr;
+        for (let i = 0; i < 30; i++) {
+            d.setDate(d.getDate() - 1);
+            const candidate = this.getLocalDateStr(d);
+            if (!this.isNonWorkingDay(candidate)) return candidate;
+        }
+        return dateStr;
+    },
+
+    // Moves a task's due date (and its deadline by the same gap).
+    shiftTaskDue(t, newDate) {
+        const from = this.parseYMD(t.dueDate), to = this.parseYMD(newDate);
+        if (from && to && t.deadlineDate) {
+            const dl = this.parseYMD(t.deadlineDate);
+            if (dl) { dl.setDate(dl.getDate() + Math.round((to - from) / 86400000)); t.deadlineDate = this.getLocalDateStr(dl); }
+        }
+        t.dueDate = newDate;
+        t.deadlineAckDate = null;
+        t.snoozeUntil = null;
+        t.updatedAt = this.stamp();
+    },
+
+    // Daily tasks never fall on a day the office is closed: any open Daily
+    // entry due on such a day (today or later) moves to the next working
+    // day by itself, recorded as skipped, not as done.
+    autoSkipDailyOnNonWorking() {
+        const today = this.getLocalDateStr(new Date());
+        const moved = [];
+        this.tasks.forEach(t => {
+            if (!t || t.deleted || t.purged || t.status === 'Completed' || t.recurrence !== 'Daily') return;
+            if (!t.dueDate || t.dueDate < today || !this.isNonWorkingDay(t.dueDate)) return;
+            const off = t.dueDate;
+            const next = this.nextWorkingDayFrom(off);
+            if (!next || next === off) return;
+            if (!Array.isArray(t.skippedDates)) t.skippedDates = [];
+            if (t.skippedDates.indexOf(off) === -1) t.skippedDates.push(off);
+            this.shiftTaskDue(t, next);
+            t.lastAckDate = null;
+            moved.push({ t: t, off: off, next: next });
+        });
+        if (!moved.length) return false;
+        this.saveData();
+        this.renderTable();
+        this.syncToGoogleSheets();
+        const m = moved[0];
+        this.showToast(moved.length === 1
+            ? '"' + m.t.description + '" (daily) skipped for ' + this.nonWorkingLabel(m.off) + ' — next on ' + this.formatDateStr(m.next) + '.'
+            : moved.length + ' daily tasks skipped for ' + this.nonWorkingLabel(m.off) + ' — next on ' + this.formatDateStr(m.next) + '.', 'info');
+        return true;
     },
 
     nextWorkingDayFrom(dateStr) {
@@ -3321,14 +3409,16 @@ const app = {
     resolveNonWorkingDue(taskId, choice) {
         const t = this.findTask(taskId);
         if (!t) return;
-        if (choice === 'next') {
-            const newDate = this.nextWorkingDayFrom(t.dueDate);
-            t.dueDate = newDate;
-            t.lastAckDate = null;
-            t.snoozeUntil = null;
-            t.updatedAt = this.stamp();
-            this.logTaskActivity(t, 'rescheduled', 'Moved off a non-working day to ' + newDate);
-            this.showToast('Moved to next working day (' + this.formatDateStr(newDate) + ').', 'success');
+        if (choice === 'next' || choice === 'prev') {
+            const today = this.getLocalDateStr(new Date());
+            let newDate = choice === 'next' ? this.nextWorkingDayFrom(t.dueDate) : this.prevWorkingDayFrom(t.dueDate);
+            if (choice === 'prev' && newDate < today) newDate = today;
+            this.shiftTaskDue(t, newDate);
+            // Preponed to today: it's being dealt with now, so today's
+            // reminder doesn't ring again straight away.
+            t.lastAckDate = newDate === today ? today : null;
+            this.logTaskActivity(t, 'rescheduled', (choice === 'next' ? 'Postponed' : 'Preponed') + ' off a non-working day to ' + newDate);
+            if (!this._bulkResolving) this.showToast((choice === 'next' ? 'Postponed' : 'Preponed') + ' to ' + this.formatDateStr(newDate) + '.', 'success');
         } else {
             t.lastAckDate = this.getLocalDateStr(new Date());
             t.updatedAt = this.stamp();
@@ -3338,6 +3428,16 @@ const app = {
         this.renderTable();
         this.processEngine();
         this.syncToGoogleSheets();
+    },
+
+    // "Prepone all" / "Postpone all" for every task in the alert that falls
+    // on a day the office is closed.
+    resolveAllNonWorkingDue(choice) {
+        const ids = (this.alarmingTasks || []).filter(t => t.recurrence !== 'Daily' && this.isNonWorkingDay(t.dueDate)).map(t => String(t.id));
+        if (!ids.length) return;
+        this._bulkResolving = true;
+        try { ids.forEach(id => this.resolveNonWorkingDue(id, choice)); } finally { this._bulkResolving = false; }
+        this.showToast(ids.length + ' task' + (ids.length === 1 ? '' : 's') + ' ' + (choice === 'next' ? 'postponed' : 'preponed') + '.', 'success');
     },
 
     loadCustomCalendars() {
@@ -3443,11 +3543,13 @@ const app = {
             this.setSelectValue('holidayType', h.type || 'USD Holiday');
             document.getElementById('holidayNextWorking').value = h.nextWorkingDay || '';
             document.getElementById('holidayAlertOn').checked = h.alert !== false;
+            document.getElementById('holidayOfficeClosed').checked = this.isOfficeClosed(h);
             if (delBtn) delBtn.style.display = '';
         } else {
             this.editingHolidayId = null;
             document.getElementById('holidayModalTitle').textContent = 'Add Holiday';
             document.getElementById('holidayAlertOn').checked = true;
+            document.getElementById('holidayOfficeClosed').checked = true;
             if (delBtn) delBtn.style.display = 'none';
         }
 
@@ -3483,7 +3585,8 @@ const app = {
             name: name,
             type: document.getElementById('holidayType').value || 'USD Holiday',
             nextWorkingDay: document.getElementById('holidayNextWorking').value || this.computeNextWorkingDay(date),
-            alert: document.getElementById('holidayAlertOn').checked
+            alert: document.getElementById('holidayAlertOn').checked,
+            officeClosed: document.getElementById('holidayOfficeClosed').checked
         };
 
         if (this.editingHolidayId) {
@@ -4560,7 +4663,7 @@ const app = {
             const idAttr = this.escAttr(h.id);
             const colour = this.holidayTypeColour(h.type);
             const isPast = h.date < todayStr;
-            const alertIco = h.alert !== false ? '🔔' : '🔕';
+            const alertIco = (h.alert !== false ? '🔔' : '🔕') + (this.isOfficeClosed(h) ? ' 🏢' : '');
 
             const row = document.createElement('tr');
             row.dataset.recordId = h.id;
@@ -5930,6 +6033,11 @@ const app = {
         };
         const next = step(base);
         if (!next) return null;
+        // A Daily task's next occurrence skips holidays (office closed),
+        // leave days and Sundays.
+        if (t.recurrence === 'Daily') {
+            for (let i = 0; i < 30 && this.isNonWorkingDay(this.getLocalDateStr(next)); i++) next.setDate(next.getDate() + 1);
+        }
 
         const nextDue = this.getLocalDateStr(next);
 
