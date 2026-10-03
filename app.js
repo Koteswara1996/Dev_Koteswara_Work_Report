@@ -26,7 +26,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '77';
+const APP_BUILD = '78';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -660,7 +660,13 @@ const app = {
         const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
         const desc = clean(t.description).replace(/[.:;,\s]+$/, '');
         const notes = this.notesForReport(t);
-        if (!notes.length) return desc;
+        if (!notes.length) {
+            // No Notes today: word it the way the same task was written in
+            // an uploaded past report, if there is one.
+            const past = this.pastLineFor(t, this._reportDate);
+            if (past) { this._pastHits = (this._pastHits || 0) + 1; return past; }
+            return desc;
+        }
         if (!desc) return notes.join(' ');
         // Notes that already restate the task in full replace the title.
         const joined = notes.join(' ');
@@ -673,6 +679,8 @@ const app = {
     // are removed across all sections and counted.
     buildReportModel(date, inputs) {
         inputs = inputs || {};
+        this._reportDate = date;
+        this._pastHits = 0;
         const d = this.collectReportData(date);
         const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
         const key = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -754,7 +762,7 @@ const app = {
         const cnt = (k) => (m.sections.find(s => s.key === k) || { rows: [] }).rows.length;
         const data = Object.assign({}, m.data, {
             payments: m.data.payments.slice(0, cnt('pay')), others: m.data.others.slice(0, cnt('oth')),
-            followed: m.data.followed.slice(0, cnt('fol')), dupes: m.dupes,
+            followed: m.data.followed.slice(0, cnt('fol')), dupes: m.dupes, pastHits: this._pastHits || 0,
             bullets: m.sections.reduce((a, s) => a + s.rows.length + (s.intro ? s.intro.length : 0), 0)
         });
         this._lastModel = m;
@@ -777,6 +785,7 @@ const app = {
             if (info) {
                 info.style.display = 'block';
                 info.innerHTML = '<b>' + r.data.payments.length + '</b> payments · <b>' + r.data.others.length + '</b> other completed · <b>' + r.data.followed.length + '</b> followed up' +
+                    (r.data.pastHits ? ' · <b>' + r.data.pastHits + '</b> worded from your past reports (check dates / amounts)' : '') +
                     (r.data.excluded ? ' · ' + r.data.excluded + ' marked "Done" (not in report)' : '') + (r.data.dupes ? ' · ' + r.data.dupes + ' duplicate' + (r.data.dupes === 1 ? '' : 's') + ' removed' : '') + (note ? '<br>' + note : '');
             }
             return r;
@@ -996,14 +1005,232 @@ const app = {
     exportDailyReportExcel() {
         const m = this._lastModel;
         if (!m) { this.showToast('Generate a report first.', 'warning'); return; }
-        const go = () => this.writeReportXlsx(m).catch(err => this.showToast('Excel export failed: ' + (err && err.message || err), 'error'));
-        if (window.ExcelJS) return go();
-        const s = document.createElement('script');
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
-        s.onload = go;
-        s.onerror = () => this.showToast('Could not load the Excel library — check your connection and try again.', 'error');
-        document.head.appendChild(s);
-        this.showToast('Preparing Excel…', 'info');
+        if (!window.ExcelJS) this.showToast('Preparing Excel…', 'info');
+        this.loadExcelJs()
+            .then(() => this.writeReportXlsx(m))
+            .catch(err => this.showToast(err && err.noLib ? 'Could not load the Excel library — check your connection and try again.' : 'Excel export failed: ' + (err && err.message || err), 'error'));
+    },
+
+    // Loads ExcelJS once (shared by export and past-report import).
+    loadExcelJs() {
+        if (window.ExcelJS) return Promise.resolve();
+        if (this._excelJsLoading) return this._excelJsLoading;
+        this._excelJsLoading = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+            s.onload = () => resolve();
+            s.onerror = () => { this._excelJsLoading = null; s.remove(); const e = new Error('Excel library not loaded'); e.noLib = true; reject(e); };
+            document.head.appendChild(s);
+        });
+        return this._excelJsLoading;
+    },
+
+    /* ---------- PAST REPORTS ----------
+       Old Daily Activity Reports (Excel in the house template or any
+       layout, or plain text) are read line by line and kept on this
+       device. When the same task comes up again without Notes, its report
+       line is worded the way it was written before — with month names
+       moved forward by the gap between the old report and this one. */
+    pastReportsKey() { return 'pureEnergyPastReports_' + (this.currentUser || 'default'); },
+
+    loadPastReports() {
+        let d = null;
+        try { d = JSON.parse(localStorage.getItem(this.pastReportsKey()) || 'null'); } catch (e) { d = null; }
+        this.pastReports = d && Array.isArray(d.lines) ? { files: Array.isArray(d.files) ? d.files : [], lines: d.lines } : { files: [], lines: [] };
+        this._pastIndex = null;
+        return this.pastReports;
+    },
+
+    savePastReports() {
+        try { localStorage.setItem(this.pastReportsKey(), JSON.stringify(this.pastReports)); }
+        catch (e) { this.showToast('Not enough space on this device to keep all past report lines.', 'error'); }
+        this._pastIndex = null;
+        this.renderPastReports();
+    },
+
+    PAST_MONTHS: ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'],
+
+    // "Thursday, 1 October 2026", "01-10-2026", "2026-10-01" → "2026-10-01"
+    pastDateFrom(text) {
+        const s = String(text || '');
+        let m = s.match(/(20\d\d)-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0');
+        m = s.match(/\b(\d{1,2})[-\/.](\d{1,2})[-\/.](20\d\d)\b/);
+        if (m) return m[3] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
+        m = s.match(/\b(\d{1,2})\s+([A-Za-z]{3,9})\s*,?\s*(20\d\d)\b/);
+        if (m) {
+            const mi = this.PAST_MONTHS.findIndex(x => x.indexOf(m[2].toLowerCase().slice(0, 3)) === 0);
+            if (mi >= 0) return m[3] + '-' + String(mi + 1).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
+        }
+        return '';
+    },
+
+    pastNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); },
+
+    pastTokens(s) {
+        const stop = { the: 1, and: 1, of: 1, for: 1, to: 1, a: 1, an: 1, in: 1, on: 1, with: 1, is: 1, by: 1, at: 1, from: 1, dr: 1, mr: 1, ms: 1 };
+        return this.pastNorm(s).split(' ').filter(w => w && !stop[w] && !/^\d+$/.test(w));
+    },
+
+    // Report lines out of a list of rows (each row = its cell texts).
+    pastLinesFromRows(rows) {
+        const intro = new Set(this.paymentIntroLines().map(x => this.pastNorm(x)));
+        const skip = /^(dear\b|please find|regards|thanks|thank you|summary\b|count\b|daily activity report|generated\b|duplicates? removed|other work completed|payments?\b|followed up|routine daily|other activities|vendor name\b|narration\b|work done\b)/i;
+        const bulletRx = /^\s*(?:[*•\-–]|\d+[.)])\s*/;
+        const bulletOnly = (c) => /^\s*(?:[*•\-–]|\d+[.)])\s*$/.test(c);
+        const hasBullets = rows.some(r => r.length && bulletOnly(r[0]) || (r[0] && bulletRx.test(r[0]) && r[0].replace(bulletRx, '').length > 3));
+        const out = [];
+        rows.forEach(r => {
+            let cells = r.map(c => String(c == null ? '' : c).replace(/\s+/g, ' ').trim()).filter(Boolean);
+            // merged cells repeat the same text — keep one
+            cells = cells.filter((c, i) => i === 0 || c !== cells[i - 1]);
+            if (!cells.length) return;
+            let bulleted = false;
+            if (bulletOnly(cells[0])) { cells = cells.slice(1); bulleted = true; }
+            else if (bulletRx.test(cells[0])) { cells[0] = cells[0].replace(bulletRx, ''); bulleted = true; }
+            if (hasBullets && !bulleted) return;
+            if (!cells.length) return;
+            let line = cells.length >= 2 && cells[0].length <= 80 && !/[:.]$/.test(cells[0]) ? cells[0] + ': ' + cells.slice(1).join(' ') : cells.join(' ');
+            line = line.replace(/\s+/g, ' ').trim();
+            if (line.length < 12 || skip.test(line) || intro.has(this.pastNorm(line))) return;
+            if (/^\d+(\.\d+)?$/.test(line)) return;
+            out.push(line);
+        });
+        return out;
+    },
+
+    // File picker handler: .xlsx / .txt / .csv / .md, several at once.
+    importPastReports(input) {
+        const files = Array.from((input && input.files) || []);
+        if (!files.length) return;
+        if (!this.pastReports) this.loadPastReports();
+        const box = document.getElementById('pastReportsStatus');
+        if (box) box.textContent = 'Reading ' + files.length + ' file' + (files.length === 1 ? '' : 's') + '…';
+        const readOne = (f) => {
+            const name = f.name || 'report';
+            if (/\.xlsx$/i.test(name)) {
+                return this.loadExcelJs().then(() => f.arrayBuffer()).then(buf => {
+                    const wb = new ExcelJS.Workbook();
+                    return wb.xlsx.load(buf).then(() => {
+                        const ws = wb.worksheets.find(w => !/duplicate/i.test(w.name)) || wb.worksheets[0];
+                        const rows = [];
+                        let dateText = '';
+                        ws.eachRow({ includeEmpty: false }, row => {
+                            const cells = [];
+                            row.eachCell({ includeEmpty: false }, c => {
+                                let v = c.value;
+                                if (v && typeof v === 'object') v = v.richText ? v.richText.map(x => x.text).join('') : (v.text || v.result || (v instanceof Date ? v.toISOString().slice(0, 10) : ''));
+                                cells.push(String(v == null ? '' : v));
+                            });
+                            if (!dateText && row.number <= 4) dateText = cells.join(' ');
+                            rows.push(cells);
+                        });
+                        return { name, date: this.pastDateFrom(name) || this.pastDateFrom(dateText), lines: this.pastLinesFromRows(rows) };
+                    });
+                });
+            }
+            if (/\.(txt|csv|md|text)$/i.test(name) || /^text\//.test(f.type || '')) {
+                return f.text().then(txt => {
+                    const rows = txt.split(/\r?\n/).map(l => /\.csv$/i.test(name) ? l.split(',') : [l]);
+                    return { name, date: this.pastDateFrom(name) || this.pastDateFrom(txt.slice(0, 200)), lines: this.pastLinesFromRows(rows) };
+                });
+            }
+            return Promise.resolve({ name, date: '', lines: [], unsupported: true });
+        };
+        const results = [];
+        files.reduce((p, f) => p.then(() => readOne(f).then(r => results.push(r), err => results.push({ name: f.name, lines: [], error: (err && err.message) || 'could not read' }))), Promise.resolve())
+            .then(() => {
+                const have = new Set(this.pastReports.lines.map(l => this.pastNorm(l.text)));
+                let added = 0;
+                results.forEach(r => {
+                    if (!r.lines.length) return;
+                    r.lines.forEach(text => {
+                        const k = this.pastNorm(text);
+                        if (have.has(k)) return;
+                        have.add(k);
+                        const ci = text.indexOf(':');
+                        const title = ci > 2 && ci <= 140 ? text.slice(0, ci) : text;
+                        this.pastReports.lines.push({ title: title.trim(), text: text, date: r.date || '' });
+                        added++;
+                    });
+                    this.pastReports.files = this.pastReports.files.filter(x => x.name !== r.name).concat([{ name: r.name, date: r.date || '', lines: r.lines.length }]);
+                });
+                this.savePastReports();
+                const bad = results.filter(r => r.unsupported || r.error);
+                const msg = added + ' new line' + (added === 1 ? '' : 's') + ' learned from ' + results.filter(r => r.lines.length).length + ' file(s)' +
+                    (bad.length ? ' · skipped: ' + bad.map(r => r.name + (r.unsupported ? ' (use .xlsx or .txt)' : ' (' + r.error + ')')).join(', ') : '');
+                this.showToast(msg, added ? 'success' : 'warning');
+                if (input) input.value = '';
+            });
+    },
+
+    clearPastReports() {
+        if (!confirm('Forget all lines learned from past reports on this device?')) return;
+        this.pastReports = { files: [], lines: [] };
+        this.savePastReports();
+        this.showToast('Past report lines cleared.', 'success');
+    },
+
+    renderPastReports() {
+        const box = document.getElementById('pastReportsStatus');
+        if (!box) return;
+        if (!this.pastReports) this.loadPastReports();
+        const p = this.pastReports;
+        box.textContent = p.lines.length
+            ? p.lines.length + ' lines learned from ' + p.files.length + ' report' + (p.files.length === 1 ? '' : 's') + ': ' +
+              p.files.slice(-6).map(f => f.name + (f.date ? ' (' + this.formatDateStr(f.date) + ')' : '')).join(', ') + (p.files.length > 6 ? ', …' : '')
+            : '';
+    },
+
+    // Moves "September 2026" (or "September") forward by the months between
+    // the old report and this one.
+    shiftPastMonths(text, fromDate, toDate) {
+        const a = this.parseYMD(fromDate), b = this.parseYMD(toDate);
+        if (!a || !b) return text;
+        const delta = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+        if (!delta) return text;
+        const names = this.PAST_MONTHS;
+        return String(text).replace(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\b(\s*[-']?\s*(20\d\d))?/gi, (all, mon, ysp, yr) => {
+            const mi = names.indexOf(mon.toLowerCase());
+            let y = yr ? Number(yr) : null;
+            let nm = mi + delta;
+            const yAdd = Math.floor(nm / 12);
+            nm = ((nm % 12) + 12) % 12;
+            const cap = names[nm].charAt(0).toUpperCase() + names[nm].slice(1);
+            return y ? cap + ' ' + (y + yAdd) : cap;
+        });
+    },
+
+    // Best past line for this task: same title (ignoring case/punctuation),
+    // else a close match on the words of the title. Newest report wins.
+    pastLineFor(t, reportDate) {
+        if (!this.pastReports) this.loadPastReports();
+        const lines = this.pastReports.lines;
+        if (!lines.length || !t || !t.description) return '';
+        if (!this._pastIndex) {
+            const idx = new Map();
+            lines.forEach(l => { const k = this.pastNorm(l.title); if (k) (idx.get(k) || idx.set(k, []).get(k)).push(l); });
+            this._pastIndex = idx;
+        }
+        const newest = (arr) => arr.slice().sort((x, y) => String(y.date || '').localeCompare(String(x.date || '')))[0];
+        let hit = null;
+        const exact = this._pastIndex.get(this.pastNorm(t.description));
+        if (exact && exact.length) hit = newest(exact);
+        if (!hit) {
+            const want = new Set(this.pastTokens(t.description));
+            if (want.size < 2) return '';
+            let best = null, bestScore = 0;
+            lines.forEach(l => {
+                const got = this.pastTokens(l.title);
+                if (got.length < 2) return;
+                let common = 0; got.forEach(w => { if (want.has(w)) common++; });
+                const score = common / (want.size + got.length - common);
+                if (score > bestScore || (score === bestScore && best && String(l.date) > String(best.date))) { best = l; bestScore = score; }
+            });
+            if (best && bestScore >= 0.7) hit = best;
+        }
+        if (!hit) return '';
+        return hit.date && reportDate ? this.shiftPastMonths(hit.text, hit.date, reportDate) : hit.text;
     },
 
     writeReportXlsx(m) {
@@ -1379,6 +1606,8 @@ const app = {
         this.loadHolidays();
         this.loadCustomCalendars();
         this.loadLeaveDays();
+        this.loadPastReports();
+        this.renderPastReports();
         this.applyTextSize();
         const reportDateEl = document.getElementById('dailyReportDate');
         if (reportDateEl && !reportDateEl.value) reportDateEl.value = this.getLocalDateStr(new Date());
@@ -1752,6 +1981,7 @@ const app = {
         let ok = false;
         const gen = this._syncGen = (this._syncGen || 0) + 1;
 
+        this._syncStartedAt = Date.now();
         this._syncRunning = this.cloudRequest(payload).then(data => {
             if (!data || data.status !== 'success') throw new Error((data && data.message) || 'Sync failed');
             ok = true;
@@ -1881,8 +2111,9 @@ const app = {
         // stay invisible, and yours stayed un-uploaded, for as long as a form
         // was left open). Only the on-screen refresh waits — see refreshUiWhenIdle().
         // A request stuck for too long (phone slept) must not block forever.
+        // (_syncStartedAt is stamped in runSync when a request really starts —
+        // stamping it here on every cycle kept a stuck sync "fresh" forever.)
         if (this._syncRunning && Date.now() - (this._syncStartedAt || 0) > this.REQUEST_TIMEOUT_MS + 10000) this._syncRunning = null;
-        this._syncStartedAt = Date.now();
         this.runSync({ manual: manual });
     },
 
@@ -3596,9 +3827,10 @@ const app = {
             this.holidays.push(Object.assign({ id: this.newId() }, fields));
         }
 
+        const wasEditing = !!this.editingHolidayId;   // closeHolidayModal() clears it
         this.saveHolidays();
         this.closeHolidayModal();
-        this.showToast(this.editingHolidayId ? 'Holiday updated.' : 'Holiday added.', 'success');
+        this.showToast(wasEditing ? 'Holiday updated.' : 'Holiday added.', 'success');
     },
 
     deleteCurrentHoliday() {
@@ -3843,6 +4075,16 @@ const app = {
         } catch (e) {
             console.error('Could not read local data:', e);
             this.tasks = [];
+            // Unreadable local copy: keep the raw text aside (it is about to
+            // be overwritten) and make the next sync a FULL download — a
+            // "changes since last time" sync would never bring back entries
+            // that didn't change, leaving the app empty for good.
+            try {
+                const raw = localStorage.getItem(CONFIG.STORAGE_KEY);
+                if (raw) localStorage.setItem(CONFIG.STORAGE_KEY + '_unreadable_' + Date.now(), raw);
+            } catch (e2) {}
+            try { localStorage.removeItem('pureEnergySyncCursor_' + this.currentUser); localStorage.removeItem('pureEnergySyncAck_' + this.currentUser); } catch (e3) {}
+            this._sync = null;
         }
     },
 
@@ -7400,7 +7642,10 @@ const rt = {
 
     push() {
         if (!this.ready) return Promise.resolve();
-        if (this._pushing) { this._again = true; return Promise.resolve(); }
+        // A push that has not settled in 2 minutes (phone slept / offline
+        // commit still queued) must not block every later push: writes are
+        // plain overwrites, so sending again is safe.
+        if (this._pushing && Date.now() - (this._pushStartedAt || 0) < 120000) { this._again = true; return Promise.resolve(); }
         const ack = this.ack();
         const dirty = app.tasks.filter(t => t && t.id && ack[String(t.id)] !== (Number(t.updatedAt) || 0));
         const tomb = app._tomb || app.loadTombstones();
@@ -7410,6 +7655,7 @@ const rt = {
         if (!dirty.length && !dels.length && !listsDirty && !calDirty) return Promise.resolve();
 
         this._pushing = true;
+        const pushId = this._pushStartedAt = Date.now();
         const batches = [];
         let b = this.db.batch(), n = 0;
         const add = (fn) => { if (n >= 450) { batches.push(b); b = this.db.batch(); n = 0; } fn(b); n++; };
@@ -7437,7 +7683,11 @@ const rt = {
                 app.saveTombstones(); this.saveAck();
                 this.setState('error', this.explain(err));
             })
-            .finally(() => { this._pushing = false; if (this._again) { this._again = false; this.schedulePush(200); } });
+            .finally(() => {
+                if (this._pushStartedAt !== pushId) return;     // a newer push took over
+                this._pushing = false;
+                if (this._again) { this._again = false; this.schedulePush(200); }
+            });
     }
 };
 
