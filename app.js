@@ -575,7 +575,11 @@ const app = {
        nothing can go missing. Payments use "Payee Name: narration" (no mail
        chain). */
     collectReportData(date) {
-        const live = this.tasks.filter(t => t && !t.deleted && !t.purged);
+        // Domestic / Urgent payments are left out of the report entirely.
+        const skipPay = (t) => this.isDomesticPaymentCategory(t.category) || this.isUrgentPaymentCategory(t.category);
+        const all = this.tasks.filter(t => t && !t.deleted && !t.purged);
+        const live = all.filter(t => !skipPay(t));
+        const skippedPayments = all.filter(t => skipPay(t) && ((t.status === 'Completed' && t.completedDate === date) || (t.status !== 'Completed' && this.workedOn(t, date)))).length;
         const completed = live.filter(t => t.status === 'Completed' && t.completedDate === date);
         const inReport = completed.filter(t => t.darInclude !== false);
         const excluded = completed.length - inReport.length;
@@ -583,7 +587,7 @@ const app = {
         const others = inReport.filter(t => !this.isPaymentEntry(t));
         const followed = live.filter(t => t.status !== 'Completed' && this.workedOn(t, date) && t.darInclude !== false);
         const byTime = (a, b) => String(a.dueTime || '99').localeCompare(String(b.dueTime || '99')) || String(a.description || '').localeCompare(String(b.description || ''));
-        return { payments: payments.sort(byTime), others: others.sort(byTime), followed: followed.sort(byTime), excluded: excluded };
+        return { payments: payments.sort(byTime), others: others.sort(byTime), followed: followed.sort(byTime), excluded: excluded, skippedPayments: skippedPayments };
     },
 
     // Takes the mail chain (as typed, or with the vendor already cut out of
@@ -718,7 +722,7 @@ const app = {
         return {
             date: date, dupes: dupeList.length, dupeList: dupeList, data: d,
             sections: [
-                // Other work completed first, then Domestic / Urgent payments.
+                // Other work completed first, then payments (Domestic / Urgent are skipped).
                 { key: 'oth', title: 'Other work completed', head: ['Work done', 'Category'], widths: [30, 80], rows: otherRows },
                 { key: 'pay', title: 'Payments', intro: payRows.length ? this.paymentIntroLines() : [], head: ['Vendor Name', 'Narration', 'Category'], widths: [30, 80, 20], rows: payRows },
                 { key: 'fol', title: 'Followed up / in progress', head: ['Work done', 'Category'], widths: [30, 80], rows: followRows },
@@ -825,7 +829,7 @@ const app = {
             if (info) {
                 info.style.display = 'block';
                 info.innerHTML = '<b>' + r.data.payments.length + '</b> payments · <b>' + r.data.others.length + '</b> other completed · <b>' + r.data.followed.length + '</b> followed up' +
-                    (r.data.excluded ? ' · ' + r.data.excluded + ' marked "Done" (not in report)' : '') + (r.data.dupes ? ' · ' + r.data.dupes + ' duplicate' + (r.data.dupes === 1 ? '' : 's') + ' removed' : '') + (note ? '<br>' + note : '');
+                    (r.data.excluded ? ' · ' + r.data.excluded + ' marked "Done" (not in report)' : '') + (r.data.skippedPayments ? ' · ' + r.data.skippedPayments + ' Domestic / Urgent payment' + (r.data.skippedPayments === 1 ? '' : 's') + ' skipped' : '') + (r.data.dupes ? ' · ' + r.data.dupes + ' duplicate' + (r.data.dupes === 1 ? '' : 's') + ' removed' : '') + (note ? '<br>' + note : '');
             }
             return r;
         };
