@@ -740,15 +740,7 @@ const app = {
             if (!s.rows.length) return;
             any = true;
             out.push('');
-            out.push(s.title + (s.key === 'pay' ? ' (' + s.rows.length + ')' : ''));
-            if (s.intro && s.intro.length) {
-                s.intro.forEach((l, i) => { if (i) out.push(''); out.push('* ' + l); });
-                out.push('');
-            }
-            // One blank line between every task; payment lines stay tight
-            // here (plain text has no half line) — the on-screen view,
-            // the copied report and the Excel file give them a half line.
-            s.rows.forEach((r, i) => { if (i && s.key !== 'pay') out.push(''); out.push('* ' + r.line); });
+            out.push.apply(out, this.reportSectionLines(s));
         });
         if (!any) { out.push(''); out.push('No completed or updated entries for this date.'); }
         const cnt = (k) => (m.sections.find(s => s.key === k) || { rows: [] }).rows.length;
@@ -759,6 +751,62 @@ const app = {
         });
         this._lastModel = m;
         return { text: out.join('\n'), data: data };
+    },
+
+    // One section of the plain-text report: heading, payment intro lines,
+    // then the bullets.
+    reportSectionLines(s) {
+        const out = [s.title + (s.key === 'pay' ? ' (' + s.rows.length + ')' : '')];
+        if (s.intro && s.intro.length) {
+            s.intro.forEach((l, i) => { if (i) out.push(''); out.push('* ' + l); });
+            out.push('');
+        }
+        // One blank line between every task; payment lines stay tight
+        // here (plain text has no half line) — the on-screen view,
+        // the copied report and the Excel file give them a half line.
+        s.rows.forEach((r, i) => { if (i && s.key !== 'pay') out.push(''); out.push('* ' + r.line); });
+        return out;
+    },
+
+    // Merges the AI rewrite into the standard report section by section:
+    // Payments always stay exactly as generated; any other section the AI
+    // shortened (fewer bullets) or left out keeps the standard wording.
+    // Mail chains the AI copied in are stripped. Returns null when the AI
+    // reply has no recognisable section headings at all.
+    mergeAiReport(m, text, mails) {
+        const titles = m.sections.map(s => s.title.toLowerCase());
+        const got = {}; let cur = null, found = 0;
+        text.split('\n').forEach(raw => {
+            const t = raw.trim();
+            const h = t.replace(/^[#*\s]+/, '').replace(/[*:]+$/, '').trim().toLowerCase();
+            const i = t.indexOf('* ') === 0 ? -1 : titles.findIndex(x => h.indexOf(x) === 0);
+            if (i >= 0) { cur = m.sections[i].key; got[cur] = got[cur] || []; found++; return; }
+            if (cur) got[cur].push(raw);
+        });
+        if (!found) return null;
+        const strip = (l) => {
+            mails.forEach(mc => { const k = l.toLowerCase().indexOf(mc.toLowerCase()); if (k >= 0) l = l.slice(0, k) + l.slice(k + mc.length); });
+            return l.replace(/\s+$/, '');
+        };
+        const out = [];
+        let kept = 0, ai = 0;
+        m.sections.forEach(s => {
+            if (!s.rows.length) return;
+            out.push('');
+            const body = (got[s.key] || []).map(strip);
+            while (body.length && !body[0].trim()) body.shift();
+            while (body.length && !body[body.length - 1].trim()) body.pop();
+            const bullets = body.filter(l => /^\s*\* /.test(l)).length;
+            if (s.key === 'pay' || bullets < s.rows.length) {
+                out.push.apply(out, this.reportSectionLines(s));
+                if (s.key !== 'pay') kept++;
+            } else {
+                out.push(s.title);
+                out.push.apply(out, body.map(l => l.trim()));
+                ai++;
+            }
+        });
+        return { lines: out, ai: ai, kept: kept };
     },
 
     generateDailyReport() {
@@ -816,20 +864,19 @@ const app = {
         this.cloudRequest({ action: 'generateDailyReport', date: rep.date, draft: rep.text, itemCount: rep.data.bullets || 0, style: 'v2' })
             .then(data => {
                 if (!data || data.status !== 'success') throw new Error((data && data.message) || 'AI rewrite failed');
-                let text = String(data.report || '').replace(/^\s*\d+[.)]\s+/gm, '* ').replace(/^\s*[-•]\s+/gm, '* ').trim();
-                const norm = (s) => s.toLowerCase().replace(/\s+/g, ' ');
-                const nt = norm(text);
-                const missing = mustPay.filter(l => nt.indexOf(norm(l)) === -1);
-                const bullets = (text.match(/^\* /gm) || []).length;
-                const leaked = mails.filter(x => nt.indexOf(norm(x)) !== -1);
-                if (missing.length || bullets < (rep.data.bullets || 0) || leaked.length) {
-                    note('AI version was not used (it ' + (missing.length ? 'changed ' + missing.length + ' payment line(s)' : bullets < rep.data.bullets ? 'dropped items' : 'added a mail chain') + ') — showing the complete standard report.');
-                    if (!auto) this.showToast('AI version rejected — kept the complete report.', 'warning');
+                const raw = String(data.report || '').replace(/^\s*\d+[.)]\s+/gm, '* ').replace(/^\s*[-•*]\s+/gm, '* ').replace(/\*\*/g, '').trim();
+                const merged = m ? this.mergeAiReport(m, raw, mails) : null;
+                if (!merged || !merged.ai) {
+                    note('AI version was not used (it ' + (merged ? 'shortened every section' : 'did not keep the section headings') + ') — showing the complete standard report.');
+                    if (!auto) this.showToast('AI version not usable — kept the complete report.', 'warning');
                     return;
                 }
+                const head = rep.text.split('\n')[0];
+                const text = [head].concat(merged.lines).join('\n');
                 this.renderReportOutput(out, text);
                 rep.aiText = text;
-                note('✨ AI-written — every payment line and item checked present.');
+                note('✨ AI-written' + (mustPay.length ? ' — payment lines kept exactly as entered' : '') +
+                    (merged.kept ? '; ' + merged.kept + ' section' + (merged.kept === 1 ? '' : 's') + ' kept in standard wording (AI dropped items)' : '') + '.');
                 this.showToast('Report ready (AI-written).', 'success');
             })
             .catch(err => {
