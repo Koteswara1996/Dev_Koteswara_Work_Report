@@ -5914,7 +5914,8 @@ const app = {
         ) : '';
     },
 
-    // "Include mail chain" tick beside Generated Narration (default on).
+    // "Include mail chain" tick beside Generated Narration: off for new entries;
+    // saved entries keep their choice (older ones, saved before the tick existed, stay on).
     narrationIncludesMail() {
         const el = document.getElementById('narrationIncludeMail');
         return !el || el.checked;
@@ -5951,7 +5952,7 @@ const app = {
         document.getElementById('narrationDocNo').value = narration ? (narration.docNo || '') : '';
         document.getElementById('narrationPurpose').value = narration ? (narration.purpose || '') : '';
         const incl = document.getElementById('narrationIncludeMail');
-        if (incl) incl.checked = !(narration && narration.includeMail === false);
+        if (incl) incl.checked = !!narration && narration.includeMail !== false;
         const nr = (this.lists.narrationTypes || []).find(x => x.name === (narration && narration.typeName));
         this.renderNarrationExtraFields(nr, narration ? narration.fieldsValues : {});
         this.updateNarrationPreview();
