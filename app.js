@@ -7291,6 +7291,7 @@ const rt = {
     },
 
     signOut() {
+        this.stopPresence();
         this.stopListening();
         if (this.auth) this.auth.signOut();
         this.setState('signin');
@@ -7331,6 +7332,45 @@ const rt = {
         this.ready = true;
         this.listen();
         this.schedulePush(50);   // upload anything this device has that the database doesn't
+        this.startPresence();
+    },
+
+    /* ---------- "in use" note for the phone app ----------
+       While this page is open, it writes users/<you>/meta/presence about once a
+       minute: { webActiveAt, lastInputAt }. The phone app reads it and, while the
+       note is fresh (under 3 minutes old) and someone used this page in the last
+       15 minutes, shows its Working Dashboard alarms as quiet notifications - this
+       page is ringing at the desk. Closed, asleep, offline or idle: the note goes
+       stale and the phone rings. Closing the page writes webActiveAt 0 at once. */
+    PRESENCE_MS: 60000,
+    _presenceTimer: null, _lastInput: Date.now(), _inputHooked: false,
+
+    startPresence() {
+        if (!this._inputHooked) {
+            this._inputHooked = true;
+            let last = 0;
+            const mark = () => { const n = Date.now(); if (n - last > 5000) { last = n; this._lastInput = n; } };
+            ['pointerdown', 'keydown', 'wheel', 'touchstart', 'mousemove'].forEach(ev => window.addEventListener(ev, mark, { passive: true, capture: true }));
+            document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { this._lastInput = Date.now(); this.sendPresence(); } });
+            window.addEventListener('pagehide', () => this.sendPresence(true));
+        }
+        clearInterval(this._presenceTimer);
+        this.sendPresence();
+        this._presenceTimer = setInterval(() => this.sendPresence(), this.PRESENCE_MS);
+    },
+
+    stopPresence() {
+        clearInterval(this._presenceTimer);
+        this._presenceTimer = null;
+        this.sendPresence(true);
+    },
+
+    sendPresence(closing) {
+        if (!this.ready || !this.db || !this.uid) return;
+        const now = Date.now();
+        try {
+            this.col('meta').doc('presence').set({ webActiveAt: closing ? 0 : now, lastInputAt: this._lastInput || 0, ts: now }, { merge: true }).catch(() => {});
+        } catch (e) { /* best effort: a missed note only means the phone rings */ }
     },
 
     col(name) { return this.db.collection('users').doc(this.uid).collection(name); },
@@ -7374,8 +7414,10 @@ const rt = {
         }, err => { this.setState('error', this.explain(err)); }));
 
         this.unsub.push(this.col('meta').onSnapshot(snap => {
+            let changed = false;
             snap.docChanges().forEach(ch => {
-                if (ch.type === 'removed') return;
+                if (ch.type === 'removed' || ch.doc.id === 'presence') return;   // the "in use" note is for the phone
+                changed = true;
                 const d = ch.doc.data() || {};
                 if (ch.doc.id === 'lists' && d.lists) { app.applyRemoteLists(d.lists, d.ts); this.metaAck('lists', d.ts); }
                 if (ch.doc.id === 'calendar' && Array.isArray(d.holidays)) {
@@ -7383,7 +7425,7 @@ const rt = {
                     this.metaAck('calendar', d.ts);
                 }
             });
-            app.refreshUiWhenIdle();
+            if (changed) app.refreshUiWhenIdle();
         }, () => {}));
     },
 
