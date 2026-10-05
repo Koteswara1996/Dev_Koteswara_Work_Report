@@ -26,7 +26,7 @@ const CONFIG = {
 };
 
 // Must match <meta name="btw-build"> in index.html and CACHE_VERSION in sw.js.
-const APP_BUILD = '77';
+const APP_BUILD = '78';
 
 // If an old cached index.html is paired with this app.js (or vice versa),
 // wipe the offline cache and reload ONCE so both come from the same deploy.
@@ -2439,7 +2439,7 @@ const app = {
                         <button class="modal-close" title="Silence all" onclick="app.stopPersistentAlarm(true)">✕</button>
                     </div>
                     <p style="color:var(--label-2); font-size:0.86rem; margin-bottom:14px;">These tasks missed their deadline and are still open.</p>
-                    <div id="alarmMutedNote" style="display:none; margin:-4px 0 12px; padding:8px 12px; border-radius:10px; font-size:0.78rem; font-weight:600; color:var(--label-2); background:var(--fill); border:1px solid var(--line);">🔇 Sound auto-muted after 2 minutes to save battery. The alerts below are still open.</div>
+                    <div id="alarmMutedNote" style="display:none; margin:-4px 0 12px; padding:8px 12px; border-radius:10px; font-size:0.78rem; font-weight:600; color:var(--label-2); background:var(--fill); border:1px solid var(--line);">🔇 Urgent alarm auto-muted after ringing for 8 hours. The alerts below are still open.</div>
                     <div id="alarmTasksContainer" style="max-height:55vh; overflow-y:auto;"></div>
                     <div class="modal-buttons">
                         <button class="btn-modal secondary" onclick="app.stopPersistentAlarm(true)">Silence All For Today</button>
@@ -2454,14 +2454,59 @@ const app = {
         const taskNames = tasks.map(t => `"${t.description}"`).join(', ');
         this.sendDesktopNotification("🚨 OVERDUE DEADLINE ALERT", `Missed deadline: ${taskNames}`, true);
 
-        if (!this.isSirenActive('alarm')) {
-            this.startSiren('alarm', this.SIREN_MAX_MS, () => {
-                const note = document.getElementById('alarmMutedNote');
-                if (note) note.style.display = 'block';
+        // Urgent (continuous) tasks keep the siren going until each one is
+        // done / silenced / snoozed / moved. Normal (single) tasks only chime
+        // once when they first show up — the popup stays, the sound doesn't.
+        const note = document.getElementById('alarmMutedNote');
+        if (note) note.style.display = 'none';
+        if (tasks.some(t => this.alertTypeOf(t) === 'continuous')) {
+            if (!this.isSirenActive('alarm')) this.startSiren('alarm', this.CONTINUOUS_MAX_MS, () => {
+                const n = document.getElementById('alarmMutedNote');
+                if (n) n.style.display = 'block';
             });
-            const note = document.getElementById('alarmMutedNote');
-            if (note) note.style.display = 'none';
+        } else {
+            this.stopSiren('alarm');
+            const fresh = tasks.filter(t => !this._chimedIds.has(String(t.id)));
+            if (fresh.length) this.playBeepPair();
         }
+        tasks.forEach(t => this._chimedIds.add(String(t.id)));
+    },
+
+    alertChipHtml(task) {
+        const id = 'alarmTypeChip_' + this.escAttr(task.id);
+        return this.alertTypeOf(task) === 'continuous'
+            ? `<span class="chip alert" id="${id}" style="display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:0.75rem; font-weight:700; border-radius:20px; color:var(--red-ink); background:rgba(239, 68, 68, 0.12); border:1px solid rgba(239, 68, 68, 0.3);">🚨 Urgent — ringing</span>`
+            : `<span class="chip alert" id="${id}" style="display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:0.75rem; font-weight:600; border-radius:20px; color:var(--label-2); background:var(--fill); border:1px solid var(--line);">🔔 Normal — single alert</span>`;
+    },
+
+    // 'continuous' = keeps ringing until acted on; 'single' (default) = one chime.
+    alertTypeOf(t) { return t && t.alertType === 'continuous' ? 'continuous' : 'single'; },
+
+    // Upper bound for an urgent siren left unattended (safety net for battery).
+    CONTINUOUS_MAX_MS: 8 * 3600000,
+    _chimedIds: new Set(),
+
+    changeAlarmAlertType(taskId, val) {
+        const task = this.findTask(taskId);
+        if (!task) return;
+        task.alertType = val === 'continuous' ? 'continuous' : 'single';
+        task.updatedAt = this.stamp();
+        const live = this.alarmingTasks.find(t => String(t.id) === String(taskId));
+        if (live) live.alertType = task.alertType;
+        const chip = document.getElementById('alarmTypeChip_' + taskId);
+        if (chip) chip.outerHTML = this.alertChipHtml(task);
+        this.saveData();
+        this.renderTable();
+        this.syncAlarmSiren();
+        this.showToast(task.alertType === 'continuous' ? 'Urgent: will keep ringing until you act.' : 'Normal: alerts once, no continuous ringing.', 'success');
+    },
+
+    // Keeps the siren in step with what's on the alert popup right now.
+    syncAlarmSiren() {
+        if (!this.isAlarming) return;
+        const urgent = this.alarmingTasks.some(t => this.alertTypeOf(this.findTask(t.id) || t) === 'continuous');
+        if (urgent && !this.isSirenActive('alarm')) this.startSiren('alarm', this.CONTINUOUS_MAX_MS);
+        else if (!urgent) this.stopSiren('alarm');
     },
 
     /* ---------- SIREN CONTROLLER ----------
@@ -2540,6 +2585,7 @@ const app = {
             if (priority) chips.push(`<span class="chip pri-${this.escAttr(priority.replace(/\s+/g, '-'))}" style="display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:0.75rem; font-weight:600; border-radius:20px; color:var(--red-ink); background:rgba(239, 68, 68, 0.1); border:1px solid rgba(239, 68, 68, 0.2);">${this.sanitize(priority)}</span>`);
             if (task.category) chips.push(`<span class="chip cat" style="display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:0.75rem; font-weight:600; border-radius:20px; color:var(--blue-ink); background:rgba(37, 99, 235, 0.1); border:1px solid rgba(37, 99, 235, 0.2);">${this.sanitize(task.category)}</span>`);
             if (task.pendingWith) chips.push(`<span class="chip person" style="display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:0.75rem; font-weight:600; border-radius:20px; color:var(--amber-ink); background:rgba(245, 158, 11, 0.1); border:1px solid rgba(245, 158, 11, 0.25);">Pending with: ${this.sanitize(task.pendingWith)}</span>`);
+            chips.push(this.alertChipHtml(task));
             chips.push(`<span class="chip rec" style="display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:0.75rem; font-weight:600; border-radius:20px; color:var(--violet-ink); background:rgba(139, 92, 246, 0.1); border:1px solid rgba(139, 92, 246, 0.2);">${isRecurring ? this.sanitize(task.recurrence) : 'One-time'}</span>`);
             
             const el = document.createElement('div');
@@ -2592,6 +2638,12 @@ const app = {
                     <span class="alarm-field" title="Change this entry's status" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
                         <select id="alarmStatus_${idAttr}" onchange="app.changeAlarmStatus('${this.jsArg(task.id)}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--blue-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
                             ${(this.lists.statuses || []).concat(this.lists.statuses.indexOf(task.status) === -1 && task.status ? [task.status] : []).map(st => `<option value="${this.escAttr(st)}"${st === task.status ? ' selected' : ''}>${this.sanitize(st)}</option>`).join('')}
+                        </select>
+                    </span>
+                    <span class="alarm-field" title="Alert type for this task" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
+                        <select id="alarmType_${idAttr}" onchange="app.changeAlarmAlertType('${this.jsArg(task.id)}', this.value)" style="font-size: 0.84rem; font-weight: 600; color: var(--red-ink); background: transparent; border: none; outline: none; padding: 4px; cursor:pointer;">
+                            <option value="single"${this.alertTypeOf(task) === 'single' ? ' selected' : ''}>🔔 Normal</option>
+                            <option value="continuous"${this.alertTypeOf(task) === 'continuous' ? ' selected' : ''}>🚨 Urgent</option>
                         </select>
                     </span>
                     <span class="alarm-field" style="display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; background: var(--input-bg); border: 1px solid var(--line);">
@@ -2741,10 +2793,11 @@ const app = {
         }
 
         this.alarmingTasks = this.alarmingTasks.filter(t => String(t.id) !== String(taskId));
+        this._chimedIds.delete(String(taskId));
         this.alarmSignature = this.alarmingTasks.map(t => String(t.id)).sort().join('|');
 
         if (this.alarmingTasks.length === 0) this.stopPersistentAlarm(false);
-        else this.renderAlarmTasks();
+        else { this.renderAlarmTasks(); this.syncAlarmSiren(); }
     },
 
     stopPersistentAlarm(acknowledgeAllRemaining = false) {
@@ -2771,6 +2824,7 @@ const app = {
 
         this.alarmingTasks = [];
         this.alarmSignature = '';
+        this._chimedIds = new Set();
     },
 
     /* ---------- HEALTH NUDGES (walk / water) ----------
@@ -5043,6 +5097,7 @@ const app = {
             document.getElementById('taskDeadlineTime').value = this.normalizeTime(t.deadlineTime);
             document.getElementById('taskMailChain').value = t.mailChain || '';
             document.getElementById('taskRecurrence').value = t.recurrence || 'None';
+            document.getElementById('taskAlertType').value = this.alertTypeOf(t);
             document.getElementById('taskNotes').value = t.notes || '';
             const darBox = document.getElementById('taskDarInclude');
             if (darBox) darBox.checked = t.darInclude !== false;
@@ -5059,6 +5114,7 @@ const app = {
             this.setSelectValue('taskPriority', pri);
             this.setSelectValue('taskStatus', stat);
             document.getElementById('taskRecurrence').value = 'None';
+            document.getElementById('taskAlertType').value = 'single';
             if (delBtn) delBtn.style.display = 'none';
         }
 
@@ -5906,6 +5962,7 @@ const app = {
             deadlineTime: this.normalizeTime(document.getElementById('taskDeadlineTime').value),
             mailChain: document.getElementById('taskMailChain').value.trim(),
             recurrence: document.getElementById('taskRecurrence').value || 'None',
+            alertType: document.getElementById('taskAlertType').value === 'continuous' ? 'continuous' : 'single',
             notes: document.getElementById('taskNotes').value,
             darInclude: (document.getElementById('taskDarInclude') || { checked: true }).checked,
             keyPoints: this.collectKeyPoints(),
@@ -7026,7 +7083,7 @@ const app = {
         // longer strips them off every entry.
         const headers = ['id', 'dateLogged', 'description', 'category', 'subCategory', 'priority', 'status', 'pendingWith',
             'dueDate', 'dueTime', 'deadlineDate', 'deadlineTime', 'mailChain', 'notes', 'recurrence', 'deleted', 'dateDeleted',
-            'lastAckDate', 'deadlineAckDate', 'snoozeUntil', 'completedDate', 'emailId', 'updatedAt', 'purged', 'seriesId'];
+            'lastAckDate', 'deadlineAckDate', 'snoozeUntil', 'completedDate', 'emailId', 'updatedAt', 'purged', 'seriesId', 'alertType'];
         const jsonHeaders = ['keyPoints', 'paymentDetails', 'subCategoryFields', 'narration'];
         const all = headers.concat(jsonHeaders);
         const rows = [all.join(',')];
