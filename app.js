@@ -539,6 +539,8 @@ const app = {
     isPaymentEntry(t) {
         // Duty payments are reported under "Other work completed".
         if (this.isDutyPaymentEntry(t)) return false;
+        // Import payments too.
+        if (this.isImportPaymentCategory(t.category)) return false;
         if (t.narration && (t.narration.typeName || t.narration.text)) return true;
         return /domestic\s*payments?|urgent\s*payments?/i.test(t.category || '');
     },
@@ -585,9 +587,13 @@ const app = {
         const completed = live.filter(t => t.status === 'Completed' && t.completedDate === date);
         const inReport = completed.filter(t => t.darInclude !== false);
         const excluded = completed.length - inReport.length;
+        // Import payments set In Progress that day (remittance initiated) go
+        // under "Other work completed", not "Followed up / in progress".
+        const isImport = (t) => this.isImportPaymentCategory(t.category);
+        const importsOpen = live.filter(t => t.status !== 'Completed' && isImport(t) && this.workedOn(t, date) && t.darInclude !== false);
         const payments = inReport.filter(t => this.isPaymentEntry(t));
-        const others = inReport.filter(t => !this.isPaymentEntry(t));
-        const followed = live.filter(t => t.status !== 'Completed' && this.workedOn(t, date) && t.darInclude !== false);
+        const others = inReport.filter(t => !this.isPaymentEntry(t)).concat(importsOpen);
+        const followed = live.filter(t => t.status !== 'Completed' && !isImport(t) && this.workedOn(t, date) && t.darInclude !== false);
         const byTime = (a, b) => String(a.dueTime || '99').localeCompare(String(b.dueTime || '99')) || String(a.description || '').localeCompare(String(b.description || ''));
         return { payments: payments.sort(byTime), others: others.sort(byTime), followed: followed.sort(byTime), excluded: excluded, skippedPayments: skippedPayments };
     },
@@ -639,9 +645,36 @@ const app = {
         return 'Made duty payment' + (boe ? ' against BOE No: ' + boe : '') + ' through ICEGATE wallet recharge. The duty payment has been verified with the BOE.';
     },
 
+    // Import payment: "Initiated an outward remittance transaction in favor
+    // of <beneficiary> towards the <advance/balance> <%> payment <against>."
+    // Null when no payment details were filled in.
+    importReportLine(t) {
+        const pd = t.paymentDetails || {};
+        const type = String(pd.paymentType || '').trim(), pct = String(pd.paymentPercent || '').trim();
+        const against = String(pd.paymentAgainst || '').trim();
+        if (!type && !pct && !against) return null;
+        const AGAINST = {
+            'before production': 'against production of goods',
+            'before dispatch': 'before dispatch',
+            'after credit period': 'after credit period completion'
+        };
+        const ag = AGAINST[against.toLowerCase()] || against.replace(/^Against\b/, 'against');
+        const payee = String(pd.beneficiary || '').trim() || this.taskPayee(t);
+        const what = [type.toLowerCase(), pct ? pct.replace(/%$/, '') + '%' : ''].filter(Boolean).join(' ');
+        return ('Initiated an outward remittance transaction' + (payee ? ' in favor of ' + payee : '') +
+            ' towards the ' + (what ? what + ' ' : '') + 'payment' + (ag ? ' ' + ag : '') + '.').replace(/\s+/g, ' ');
+    },
+
+    // Lines with a set wording that the AI rewrite must keep as they are.
+    isFixedReportLine(t) {
+        return (t.status === 'Completed' && this.isDutyPaymentEntry(t)) ||
+            (this.isImportPaymentCategory(t.category) && !!this.importReportLine(t));
+    },
+
     reportLine(t) {
         const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
         if (t.status === 'Completed' && this.isDutyPaymentEntry(t)) return this.dutyReportLine(t);
+        if (this.isImportPaymentCategory(t.category)) { const l = this.importReportLine(t); if (l) return l; }
         if (this.isPaymentEntry(t)) {
             // "Vendor Name: <narration without mail chain>"
             const n = t.narration || {};
@@ -746,8 +779,8 @@ const app = {
             const out = [];
             list.forEach(t => {
                 const line = this.reportLine(t);
-                // duty payment lines keep their exact wording, even in the AI version
-                if (keep(line, sec)) out.push({ line: line, cols: [line, t.category || ''], t: t, fixed: t.status === 'Completed' && this.isDutyPaymentEntry(t) });
+                // duty / import payment lines keep their exact wording, even in the AI version
+                if (keep(line, sec)) out.push({ line: line, cols: [line, t.category || ''], t: t, fixed: this.isFixedReportLine(t) });
             });
             return out;
         };
@@ -843,14 +876,14 @@ const app = {
             while (body.length && !body[0].trim()) body.shift();
             while (body.length && !body[body.length - 1].trim()) body.pop();
             if (s.rows.some(r => r.fixed)) {
-                // Put the exact duty payment lines back in their place and
-                // drop the AI's rewording of them.
+                // Put the exact duty / import payment lines back in their
+                // place and drop the AI's rewording of them.
                 const items = [];
                 body.forEach(l => {
                     const t = l.trim(); if (!t) return;
                     if (/^\* /.test(t) || !items.length) items.push(t.replace(/^\* /, '')); else items[items.length - 1] += ' ' + t;
                 });
-                const ai2 = items.filter(x => !/\bduty\b|icegate|\bboe\b|bill\s*of\s*entry/i.test(x));
+                const ai2 = items.filter(x => !/\bduty\b|icegate|\bboe\b|bill\s*of\s*entry|remittance/i.test(x));
                 const need = s.rows.filter(r => !r.fixed).length;
                 if (ai2.length >= need) {
                     const rebuilt = []; let j = 0;
@@ -5306,6 +5339,7 @@ const app = {
         // filled in — clear whatever no longer applies.
         if (!showImport) {
             document.getElementById('pdPaymentPercent').value = '';
+            if (document.getElementById('pdBeneficiary')) document.getElementById('pdBeneficiary').value = '';
             this.setSelectValue('pdPaymentType', '');
             this.setSelectValue('pdPaymentAgainst', '');
         }
@@ -5330,6 +5364,7 @@ const app = {
     renderPaymentDetails(pd) {
         pd = pd || {};
         document.getElementById('pdPaymentPercent').value = pd.paymentPercent || '';
+        if (document.getElementById('pdBeneficiary')) document.getElementById('pdBeneficiary').value = pd.beneficiary || '';
         this.setSelectValue('pdPaymentType', pd.paymentType || '');
         this.setSelectValue('pdPaymentAgainst', pd.paymentAgainst || '');
         this.updateConditionalFields();
@@ -5338,6 +5373,7 @@ const app = {
     collectPaymentDetails() {
         return {
             paymentPercent: document.getElementById('pdPaymentPercent').value.trim(),
+            beneficiary: document.getElementById('pdBeneficiary') ? document.getElementById('pdBeneficiary').value.trim() : '',
             paymentType: document.getElementById('pdPaymentType').value,
             paymentAgainst: document.getElementById('pdPaymentAgainst').value
         };
