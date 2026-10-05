@@ -537,6 +537,8 @@ const app = {
     },
 
     isPaymentEntry(t) {
+        // Duty payments are reported under "Other work completed".
+        if (this.isDutyPaymentEntry(t)) return false;
         if (t.narration && (t.narration.typeName || t.narration.text)) return true;
         return /domestic\s*payments?|urgent\s*payments?/i.test(t.category || '');
     },
@@ -602,8 +604,44 @@ const app = {
         return s.replace(/\s+/g, ' ').trim();
     },
 
+    // Duty payment (BOE): the category, sub category or narration type says
+    // "duty", or the narration mentions a duty payment.
+    isDutyPaymentEntry(t) {
+        if (!t) return false;
+        const n = t.narration || {};
+        const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId)) || {};
+        return [t.category, t.subCategory, n.typeName, nr.name, nr.phrase, n.text, n.reportText]
+            .some(x => /\bduty\b/i.test(String(x || '')));
+    },
+
+    // BOE No for a duty payment, from whatever was filled in when the task
+    // was completed: a "BOE" sub category / narration field, the narration's
+    // document number, or a "BOE No: …" in the narration or notes.
+    dutyBoeNo(t) {
+        const n = t.narration || {};
+        const isBoe = (k) => /\bboe\b|bill\s*of\s*entry/i.test(String(k || ''));
+        const fromFields = (o) => { const k = Object.keys(o || {}).find(x => isBoe(x) && String(o[x] || '').trim()); return k ? String(o[k]).trim() : ''; };
+        let v = fromFields(t.subCategoryFields) || fromFields(n.fieldsValues);
+        if (!v && String(n.docNo || '').trim()) {
+            const nr = (this.lists.narrationTypes || []).find(x => x.name === n.typeName || (n.typeId && x.id === n.typeId)) || {};
+            if (isBoe(nr.docLabel) || isBoe(nr.phrase) || !nr.docLabel) v = String(n.docNo).trim();
+        }
+        if (!v) {
+            const m = [n.text, n.reportText, t.notes, t.description].map(x => String(x || ''))
+                .map(x => x.match(/(?:\bboe\b|bill\s*of\s*entry)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\/,&\- ]*[A-Za-z0-9])/i)).find(Boolean);
+            if (m) v = m[1];
+        }
+        return v.replace(/\s+/g, ' ').replace(/[.,;:\s]+$/, '').trim();
+    },
+
+    dutyReportLine(t) {
+        const boe = this.dutyBoeNo(t);
+        return 'Made duty payment' + (boe ? ' against BOE No: ' + boe : '') + ' through ICEGATE wallet recharge. The duty payment has been verified with the BOE.';
+    },
+
     reportLine(t) {
         const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        if (t.status === 'Completed' && this.isDutyPaymentEntry(t)) return this.dutyReportLine(t);
         if (this.isPaymentEntry(t)) {
             // "Vendor Name: <narration without mail chain>"
             const n = t.narration || {};
@@ -706,7 +744,11 @@ const app = {
         });
         const descRows = (list, sec) => {
             const out = [];
-            list.forEach(t => { const line = this.reportLine(t); if (keep(line, sec)) out.push({ line: line, cols: [line, t.category || ''], t: t }); });
+            list.forEach(t => {
+                const line = this.reportLine(t);
+                // duty payment lines keep their exact wording, even in the AI version
+                if (keep(line, sec)) out.push({ line: line, cols: [line, t.category || ''], t: t, fixed: t.status === 'Completed' && this.isDutyPaymentEntry(t) });
+            });
             return out;
         };
         const otherRows = descRows(d.others, 'Other work completed');
@@ -797,9 +839,27 @@ const app = {
         m.sections.forEach(s => {
             if (!s.rows.length) return;
             out.push('');
-            const body = (got[s.key] || []).map(strip);
+            let body = (got[s.key] || []).map(strip);
             while (body.length && !body[0].trim()) body.shift();
             while (body.length && !body[body.length - 1].trim()) body.pop();
+            if (s.rows.some(r => r.fixed)) {
+                // Put the exact duty payment lines back in their place and
+                // drop the AI's rewording of them.
+                const items = [];
+                body.forEach(l => {
+                    const t = l.trim(); if (!t) return;
+                    if (/^\* /.test(t) || !items.length) items.push(t.replace(/^\* /, '')); else items[items.length - 1] += ' ' + t;
+                });
+                const ai2 = items.filter(x => !/\bduty\b|icegate|\bboe\b|bill\s*of\s*entry/i.test(x));
+                const need = s.rows.filter(r => !r.fixed).length;
+                if (ai2.length >= need) {
+                    const rebuilt = []; let j = 0;
+                    s.rows.forEach(r => rebuilt.push(r.fixed ? r.line : ai2[j++]));
+                    ai2.slice(j).forEach(x => rebuilt.push(x));
+                    body = [];
+                    rebuilt.forEach((x, i) => { if (i) body.push(''); body.push('* ' + x); });
+                } else body = [];
+            }
             const bullets = body.filter(l => /^\s*\* /.test(l)).length;
             if (s.key === 'pay' || bullets < s.rows.length) {
                 out.push.apply(out, this.reportSectionLines(s));
